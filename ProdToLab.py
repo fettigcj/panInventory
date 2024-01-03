@@ -1,4 +1,4 @@
-import panCore
+from pancore import panCore
 
 def stripHiddenChars(stringToStrip):
     stripChars = ['\r\n', '\n', '\r', '\t', '\0', '\x0B', '\\n', 'b\'', '\'', '                  ','        ','      ']

@@ -20,7 +20,7 @@ Goals:
     uidServerMonitor 'states' xmlData = panCore.xmlToLXML(fw_obj.op('<show><user><server-monitor><state>all</state></server-monitor></user></show>', cmd_xml=False))
 """
 #Import custom library modules
-import panCore, panExcelStyles
+from pancore import panCore, panExcelStyles
 #Import stock/public library modules
 import sys, datetime, xlsxwriter, argparse, re
 

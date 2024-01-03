@@ -29,7 +29,7 @@ Goals
 """
 
 
-import panCore
+from pancore import panCore, panExcelStyles
 import json
 import sys
 from collections import OrderedDict
@@ -37,7 +37,7 @@ import re  # Because regex is awesome
 import datetime, argparse
 import panos  # Because we hate reinventing the wheel
 from panos import ha, panorama, base, firewall
-import panExcelStyles  # Because we're storing our style elsewhere to be reused among multiple scripts.
+
 
 parser = argparse.ArgumentParser(
     prog="PanInventory",

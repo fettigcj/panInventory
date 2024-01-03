@@ -30,7 +30,7 @@ Goals:
 """
 
 #Import custom library modules
-import panCore, panExcelStyles
+from pancore import panCore, panExcelStyles
 #Import stock/public library modules
 import sys, datetime, xlsxwriter, argparse
 

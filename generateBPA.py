@@ -1,9 +1,8 @@
-import panCore
+from pancore import panCore
 import requests, sys, time, zipfile, json, argparse
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
-bpaKey = '8e9cfc143113a7589d92b42b0c156a0202b448cc'
 
 parser = argparse.ArgumentParser(
     prog="PanInventory",
@@ -11,11 +10,12 @@ parser = argparse.ArgumentParser(
     #epilog="Text")
 
 parser.add_argument('-l', '--headless', help="Operate in headless mode, without user input (Will disable panCore's ability to prompt for credentials)", default=False, action='store_true')
-parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='OverrideFinder.log')
+parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='BPA_Generator.log')
 parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
 parser.add_argument('-z', '--zipfile', help="Disable zip file", default="true", choices=['true', 'false'])
+# NOTE bpa API expects STRINGS 'true' or 'false' so we CAN NOT use default=True and 'store_false' like below.
 parser.add_argument('-e', '--extractzip', help="Disable extraction of ZIP file", default=True, action='store_false')
-parser.add_argument('-k', '--key', help="BPA API Key", default=bpaKey)
+parser.add_argument('-k', '--key', help="BPA API Key")
 args = parser.parse_known_args()
 
 def stripHiddenChars(stringToStrip):
@@ -44,9 +44,9 @@ panCore.startLogging(args[0].logfile)
 #panCore.initXLSX(args[0].workbookname)
 panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
 if hasattr(panCore, 'panUser'):
-    pano_obj, deviceGroups, firewalls = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
+    pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
 elif hasattr(panCore, 'panKey'):
-    pano_obj, deviceGroups, firewalls = panCore.buildPano_obj(panAddress=panCore.panAddress, panKey=panCore.panKey)
+    pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panKey=panCore.panKey)
 else:
     panCore.logging.critical("Found neither username/password nor API key. Exiting.")
     sys.exit()
@@ -65,7 +65,7 @@ tempTime = time.strftime("%Y-%m-%d_%H-%M", time.localtime())
 panCore.logging.info(f"Sending Panorama information to BPA API for analysis at {tempTime}")
 taskResponse = requests.post(
     url="https://bpa.paloaltonetworks.com/api/v1/create/",
-    headers={'Authorization': "Token {0}".format(bpaKey)},
+    headers={'Authorization': "Token {0}".format(args[0].key)},
     verify=False,
     files={'xml': (None, runningConf),
            'system_info': (None, sysInfo),
@@ -87,7 +87,7 @@ tempTime = time.strftime("%Y-%m-%d_%H-%M", time.localtime())
 panCore.logging.info(f"Finished submitting data to generate BPA at {tempTime}. Waiting 3 minutes to retrieve results.")
 time.sleep(180)
 
-bpaResults = getResults(taskID, bpaKey)
+bpaResults = getResults(taskID, args[0].key)
 retryCount = 1
 while (bpaResults.status_code == 202) and ("processing" in str(bpaResults.content)):
     tempTime = time.strftime("%Y-%m-%d_%H-%M", time.localtime())
@@ -135,7 +135,7 @@ file.close()
 if args[0].zipfile == "true":
     tempTime = time.strftime("%Y-%m-%d_%H-%M", time.localtime())
     panCore.logging.info(f"Downloading BPA ZIP from Palo Alto Networks BPA Portal at {tempTime}")
-    bpaReport = getZip(taskID, bpaKey)
+    bpaReport = getZip(taskID, args[0].key)
     retryCount = 1
     while (bpaReport.status_code == 404) and (args[0].zipfile == "true"):
         if retryCount == 12:
@@ -146,7 +146,7 @@ if args[0].zipfile == "true":
         panCore.logging.info(f"Report not ready or otherwise not found during download attempt {retryCount} at {tempTime}")
         panCore.logging.info("Waiting 5 minutes to try again")
         time.sleep(300)
-        bpaReport = getZip(taskID, bpaKey)
+        bpaReport = getZip(taskID, args[0].key)
         retryCount = retryCount + 1
 
     fileName = "BPA_" + hostname + "_" + tempTime + ".zip"
