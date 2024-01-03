@@ -17,7 +17,7 @@ Changelog
     2023-02-09 - Aesthetic cleanup, standardized 'no username or key found' section and corrected var1[:-5] to var1[:-3] typo in passive override report section.
 """
 
-import panCore, panExcelStyles
+from pancore import panCore, panExcelStyles
 import datetime, sys, argparse
 
 parser = argparse.ArgumentParser(

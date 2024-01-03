@@ -19,9 +19,9 @@ Goals:
 
 """
 #Import custom library modules
-import panCore, panExcelStyles, panos.errors
+from pancore import panCore, panExcelStyles
 #Import stock/public library modules
-import sys, datetime, xlsxwriter, argparse
+import sys, datetime, xlsxwriter, argparse, panos.errors
 
 parser = argparse.ArgumentParser(
     prog="PanSecurityGroupsAndProfiles",

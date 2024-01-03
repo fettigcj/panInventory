@@ -411,7 +411,7 @@ def configStart(headless=False, configStorage='panCoreConfig.json'):
                  f"else:\n"
                  f"\tlogger.info('\t{_varName} retrieved.')")
         logger.info('Done getting environmentVariables.')
-        print(panAddress)
+        #print(panAddress)
         #if not panAddress and not scmUser:
         #    logger.critical(f"Failed to retrieve Panorama address or SCM User from environment variables. Exiting\n"
         #                    f"If you've just built the setVariables.bat file go run it to create the necessary environment variables\n"
@@ -434,9 +434,9 @@ def startLogging(logFileName):
     logger.addHandler(fileLogger)
     logger.addHandler(screenLogger)
 """
-MAILHOST = 'smtp.coca-cola.com'
+MAILHOST = 'smtp.testServer.com'
 FROM = 'panCoreScript@scriptOutput.local'
-TO = ['cfettig@coca-cola.com']
+TO = ['reportOutput@testServer.com']
 SUBJECT = 'PanCore Log Output'
 class smtpLogger(logging.handlers.BufferingHandler):
     def __init__(self, mailhost, fromaddr, toaddrs, subject, capacity):
@@ -479,8 +479,6 @@ def test():
 if __name__ == "__main__":
     test()
 """
-
-
 
 # logging.basicConfig(filename='PanSanityCheck.log', level=logging.DEBUG)
 # console = logging.StreamHandler()

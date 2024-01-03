@@ -10,15 +10,16 @@
 #
 ################################################################################
 """
-Changelog 2023-11-08:
-Changelog 2023-11-29:
-    Base functionality finished.
+Changelog
+2023-11-08: Started Project
+2023-11-29: Base functionality finished.
+2024-01-03: Reformat SMTP to utilize arg parser input, reconfigured 'firewalls' input to accept txt file input optionally
 
 
 """
 
 #Import custom library modules
-import panCore, panExcelStyles
+from pancore import panCore, panExcelStyles
 #Import stock/public library modules
 import sys, datetime, xlsxwriter, argparse, re, time, panos, smtplib
 #from email.message import EmailMessage
@@ -30,13 +31,18 @@ parser = argparse.ArgumentParser(
     #epilog="Text")
 
 parser.add_argument('-l', '--headless', help="Operate in headless mode, without user input (Will disable panCore's ability to prompt for credentials)", default=False, action='store_true')
-parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='upgradeFirewalls.log')
+parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='upgrade-firewalls.log')
 parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
 parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='upgradeFirewalls.xlsx')
-parser.add_argument('-V', '--targetVersion', help="What version to upgrade to", default="9.1.16-h3")
-parser.add_argument( '-A', '--upgradeActive', help="Suspend & upgrade active IF passive already upgraded.", default=True)
-parser.add_argument('-O', '--reportOnly', help="Generate report only, do NOT ugprade", default=False)
-parser.add_argument('-S', '--upgradeStandalone', help='Upgrade & Reboot non-HA firewalls. WILL CAUSE OUTAGE DURING REBOOT.', default=False)
+parser.add_argument('-V', '--targetVersion', help="What version to upgrade to", default="10.1.11")
+parser.add_argument( '-A', '--upgradeActive', help="Suspend & upgrade active IF passive already upgraded.", default=False, action='store_true')
+parser.add_argument('-U', '--enableUpgrade', help="Enable upgrading of firewalls. Otherwise report only", default=False, action='store_true')
+parser.add_argument('-S', '--upgradeStandalone', help='Upgrade & Reboot non-HA firewalls. WILL CAUSE OUTAGE DURING REBOOT.', default=False, action='store_true')
+parser.add_argument('-E', '--mailEnable', help='Enable SMTP e-mail reporting.', default=False, action='store_true')
+parser.add_argument('-F', '--mailFrom', help='SMTP source address')
+parser.add_argument('-T', '--mailTo', help='SMTP destination address')
+parser.add_argument('-M', '--Mailserver', help='SMTP server address')
+parser.add_argument('-f','--filename', help='file containing line break separated serial number list to limit scope.')
 args = parser.parse_known_args()
 
 panCore.startLogging(args[0].logfile)
@@ -49,13 +55,14 @@ else:
     panCore.logging.critical("Found neither username/password nor API key. Exiting.")
     sys.exit()
 
-"""
-firewalls = []
+# If a filename was specified override the 'firewalls' list retrieved from panorama
+# with the explicit serial numbers in the file
+if args[0].filename:
+    firewalls = []
+    with open('fwSerials.txt') as file:
+        for line in file:
+            firewalls.append(line.rstrip())
 
-with open('fwSerials.txt') as file:
-    for line in file:
-        firewalls.append(line.rstrip())
-"""
 
 
 def sendmail(fileName, fwName, reason, sessionCountInRange):
@@ -72,10 +79,10 @@ def sendmail(fileName, fwName, reason, sessionCountInRange):
             msg['Subject'] = f"{fwName} Cleanly upgraded ({reason})"
         else:
             msg['Subject'] = f"{fwName} Upgraded ({reason}) POST UPGRADE SESSION COUNT OUT OF RANGE"
-    msg['From'] = "upgradeScript@coca-cola.com"
-    msg['To'] = 'cfettig@coca-cola.com'
+    msg['From'] = args[0].mailFrom
+    msg['To'] = args[0].mailTo
     msg['Content-Type'] = 'text/html'
-    sender = smtplib.SMTP('smtp.coca-cola.com')
+    sender = smtplib.SMTP(args[0].Mailserver)
     sender.send_message(msg)
     sender.quit()
 
@@ -93,7 +100,8 @@ def getFirewall(firewall):
     elif isinstance(firewall, panos.firewall.Firewall):
         fw_obj = firewall
     else:
-        panCore.logging.error(f"Received neither string containing serial number nor fw_obj. Invalid input. Investigate.")
+        panCore.logging.error("Received neither string containing serial number "
+                              "nor fw_obj. Invalid input. Investigate.")
         return False, False
     try:
         sysState = fw_obj.show_system_info()
@@ -179,8 +187,8 @@ def checkUpgradabilityActive():
     ):
         panCore.logging.warning(f"    > {fwName} is active, but its peer's PAN-OS version not greater than its own. Skipping upgrade until peer is upgraded.")
         return False, "Pending Passive Upgrade"
-    if args[0].reportOnly:
-        panCore.logging.info(f"    > {fwName} is active, and script was called with 'upgradeActive == True' and Passive PAN-OS version is greater than its own. However 'ReportOnly' flag is set. Standing down...")
+    if not args[0].enableUpgrade:
+        panCore.logging.info(f"    > {fwName} is active, and script was called with 'upgradeActive == True' and Passive PAN-OS version is greater than its own. However 'enableUpgrade' flag is NOT set. Standing down...")
         return False, "Reporting Only"
     panCore.logging.info(f"    > {fwName} is active, but script was called with 'upgradeActive == True' and Passive PAN-OS version is greater than its own. Proceeding to suspend Active firewall and ugprade. ")
     preSessions = getSessionCount(fw_obj)
@@ -199,8 +207,8 @@ def checkUpgradabilityActive():
         return True, "ReadyToUpgrade"
 
 def upgradeFirewall():
-    if args[0].reportOnly:
-        panCore.logging.info(f"    > Upgrade function called, but 'reportOnly' set. Skipping actual upgrade.")
+    if not args[0].enableUpgrade:
+        panCore.logging.info(f"    > Upgrade function called, but 'reportOnly' mode is active as 'enableUpgrade' flag is not set. Skipping actual upgrade.")
         return
     try:
         fw_obj.software.upgrade_to_version(args[0].targetVersion)
@@ -374,7 +382,7 @@ for firewall in firewalls:
     sessionCountInRange = upgradeable = True  # set value in outer scope so they can be modified in function
     upgradeable, reason = upgradeChecker()
     if upgradeable:
-        if not args[0].reportOnly:
+        if args[0].enableUpgrade:
             backupTaken = takeBackup()
             if backupTaken:
                 preUpgradesessionCount = getSessionCount(fw_obj)
@@ -406,7 +414,8 @@ for firewall in firewalls:
         'startingVersion': startingVersion,
         'endingVersion': endingVersion
     }
-    sendmail(f"{fwName}.log", fwName, reason, sessionCountInRange)
+    if args[0].mailEnable:
+        sendmail(f"{fwName}.log", fwName, reason, sessionCountInRange)
 
 headers = ['serial', 'hostname', 'haState', 'upgradeable', 'details', 'startingVersion', 'endingVersion']
 workbook_obj = xlsxwriter.Workbook(args[0].workbookname)

@@ -11,14 +11,14 @@
 ################################################################################
 
 
-import panCore
+from pancore import panCore, panExcelStyles
 #import json, requests
 # from collections import OrderedDict
 #import re
 import datetime,time
 #import pandevice  # Because we hate reinventing the wheel
 #from pandevice import ha, panorama, base, firewall
-import panExcelStyles  # Because we're storing our style elsewhere to be reused among multiple scripts.
+
 
 
 workBookName = "PanSysHealth.xlsx"  # Name the Excel workbook we'll write to later
