@@ -19,20 +19,31 @@ Changelog
 2023-12-27:
     Address group functionality added.
 
+2023-12-29:
+    Base functionality established & tested.
+    Tags, Address Objects, Address Groups, Regions, Application Objects (Basic, SCM API rejects signature details),
+    App Groups, App filters, Service objects, Service Groups, Custom URL categories, Dynamic User Groups, EDL's,
+    Schedules, and Security rules are all created successfully.
+
+2024-01-03:
+    Added -F --sharedFolder to args. Replaced (pano_obj, 'All') with (pano_obj, args[0].sharedFolder) to facilitate
+    variable destination folder when writing objects from Panorama's "Shared" context.
+    Replaced "postSecurityPolicies(" with "processRulebasePolicies(" since pan-os-python co-mingles all policy types.
+
+
+
 Future Goals:
     panCore.getSCM_Token() will return HTTP response in the event of a fault, along with a token 'expiry' time of the current time.
     Need to write error handling to either log-and-exit or otherwise handle faults.
     Suspect that returning CURRENT time as expiry time will create a loop since this script will re-try key generation upon reaching expiry time.
 
-    Currently nested groups will error out on first run to be created in a subsequent run.
+    Currently nested groups will error out on first run, but be created properly in a subsequent run.
     Would like to create a way to detect missing members and force groups which contain groups to be created last.
 
     Create a method to update an object when it already exists rather than simply reporting "Object Already Exists"
 
     Create postData() function for other functions to call to relegate decoding HTTP 201 / 400 / 401 etc codes to
     shared code instead of copy-paste stuff that needs to be separately maintained.
-
-    Add ability to select destination for "Shared" to avoid assuming everything goes to "All" folder.
 
     Add while errors() loop to eliminate objects w/ errors (Address groups w/ missing nested members get rejected until nested member created)
 
@@ -666,67 +677,125 @@ def postSchedules(source, destination):
             panCore.logging.error(response.json())
         schedNum += 1
 
-def postSecurityPolicies(ruleBase, context, destination, logDest='Cortex Data Lake'):
+def postSecurityRules(rule_obj, context, headers, destination, logDest='Cortex Data Lake'):
+    devData = {'name': rule_obj.name,
+               'from': rule_obj.fromzone,
+               'to': rule_obj.tozone,
+               'source': rule_obj.source,
+               'source_user': rule_obj.source_user,
+               'destination': rule_obj.destination,
+               'application': rule_obj.application,
+               'service': rule_obj.service,
+               'category': rule_obj.category,
+               'log_setting': logDest,  # Default rules to forward logs to Cortex Data Lake.
+               'action': rule_obj.action,
+               **({'description': rule_obj.description} if rule_obj.description is not None else {}),
+               # rule_obj.log_start      SCM API unable to configure currently
+               # rule_obj.log_end        SCM API unable to configure currently
+               # rule_obj.type          SCM only seems to have 'Universal' rather than "inter" or "intra-zone" rules - at least within Prisma Access
+               **({'tag': rule_obj.tag} if rule_obj.tag is not None else {}),
+               **({'negate_source': rule_obj.negate_source} if rule_obj.negate_source is not None else {}),
+               **({
+                      'negate_destination': rule_obj.negate_destination} if rule_obj.negate_destination is not None else {}),
+               **({'disabled': rule_obj.disabled} if rule_obj.disabled is not None else {}),
+               # rule_obj.schedule
+               # rule_obj.icmp_unreachable
+               # rule_obj.disable_server_response_inspection
+               **({'profile_setting': {'group': rule_obj.group}} if rule_obj.group is not None else {}),
+               **({'source_hip': rule_obj.source_devices} if rule_obj.source_devices is not None else {}),
+               **({'destination_hip': rule_obj.destination_devices} if rule_obj.destination_devices is not None else {})
+               }
+    submission = {
+        'devData': devData,
+        'thingName': rule_obj.name,
+        'headers': headers,
+        'endpoint': "/security-rules",
+        'params': {'folder': destination,
+                   'position': context}}
+    scmErorrs = postThing(submission)
+    return scmErorrs
+
+def processRulebasePolicies(ruleBase, context, destination, logDest='Cortex Data Lake'):
     # HTTP post to SCM to create security policy in specified Pre- or Post- context in destination folder.
     ruleNum = 1
     ruleCount = len(ruleBase.children)
-    panCore.logging.info(f"\tRetrieved {ruleCount} security policies.")
+    panCore.logging.info(f"\tRetrieved {ruleCount} policies.")
     headers, tokenExpiryTime = panCore.getSCM_Token(panCore.scmUser, panCore.scmPass, panCore.scmTSG)
     if tokenExpiryTime <= time.time():
         panCore.logging.error("Error: Received expired token. Investigate.")
     for rule_obj in ruleBase.children:
-        if type(rule_obj) == panos.policies.SecurityRule:
-            devData = {'name': rule_obj.name,
-                       'from': rule_obj.fromzone,
-                       'to': rule_obj.tozone,
-                       'source': rule_obj.source,
-                       'source_user': rule_obj.source_user,
-                       'destination': rule_obj.destination,
-                       'application': rule_obj.application,
-                       'service': rule_obj.service,
-                       'category': rule_obj.category,
-                       'log_setting': logDest, # Default rules to forward logs to Cortex Data Lake.
-                       'action': rule_obj.action,
-                       **({'description': rule_obj.description} if rule_obj.description is not None else {}),
-                       # rule_obj.log_start      SCM API unable to configure currently
-                       # rule_obj.log_end        SCM API unable to configure currently
-                       # rule_obj.type          SCM only seems to have 'Universal' rather than "inter" or "intra-zone" rules - at least within Prisma Access
-                       **({'tag': rule_obj.tag} if rule_obj.tag is not None else {}),
-                       **({'negate_source': rule_obj.negate_source} if rule_obj.negate_source is not None else {}),
-                       **({'negate_destination': rule_obj.negate_destination} if rule_obj.negate_destination is not None else {}),
-                       **({'disabled': rule_obj.disabled} if rule_obj.disabled is not None else {}),
-                       # rule_obj.schedule
-                       # rule_obj.icmp_unreachable
-                       # rule_obj.disable_server_response_inspection
-                       **({'profile_setting': {'group': rule_obj.group}} if rule_obj.group is not None else {}),
-                       **({'source_hip': rule_obj.source_devices} if rule_obj.source_devices is not None else {}),
-                       **({'destination_hip': rule_obj.destination_devices} if rule_obj.destination_devices is not None else {})
-                       }
+        if time.time() >= tokenExpiryTime:
+            headers, tokenExpiryTime = panCore.getSCM_Token(panCore.scmUser, panCore.scmPass, panCore.scmTSG)
+            if tokenExpiryTime <= time.time():
+                panCore.logging.error("Error: Received expired token. Investigate.")
+        if isinstance(rule_obj, panos.policies.ApplicationOverride):
+            print('ApplicationOverride')
+        if isinstance(rule_obj, panos.policies.AuthenticationRule):
+            print('AuthenticationRule')
+        if isinstance(rule_obj, panos.policies.DecryptionRule):
+            print('DecryptionRule')
+        if isinstance(rule_obj, panos.policies.NatRule):
+            print('NatRule')
+        if isinstance(rule_obj, panos.policies.PolicyBasedForwarding):
+            print('PolicyBasedForwarding')
+        if isinstance(rule_obj, panos.policies.SecurityRule):
             panCore.logging.info(f"\tgot info for rule {rule_obj.name}. Posting to SCM... (Rule {ruleNum}/{ruleCount})")
-            if time.time() >= tokenExpiryTime:
-                headers, tokenExpiryTime = panCore.getSCM_Token(panCore.scmUser, panCore.scmPass, panCore.scmTSG)
-                if tokenExpiryTime <= time.time():
-                    panCore.logging.error("Error: Received expired token. Investigate.")
-            params = {'folder': destination,
-                      'position': context}
-            response = requests.request("POST", panCore.scmConfURL + "/security-rules", headers=headers, data=json.dumps(devData), params=params)
-            if response.status_code == 201:
-                panCore.logging.info("\t\tSCM created new security rule.")
-            elif response.status_code == 400:
-                panCore.logging.warning("\t\tHTTP 400 encountered.")
-                try:
-                    panCore.logging.warning(
-                        f"    {response.json()['_errors'][0]['details']['errorType']} : {response.json()['_errors'][0]['details']['message']}")
-                except:
-                    panCore.logging.warning("\t\tresponse does not contain anticipated error data.")
-            else:
-                panCore.logging.error("\t\tUnexpected HTTP status code encountered. HTTP status and JSON to follow:")
-                panCore.logging.error(response.status_code)
-                panCore.logging.error(response.json())
-            ruleNum += 1
+            scmErrors = postSecurityRules(rule_obj, context, headers, destination, logDest)
+        ruleNum += 1
+
+
+def postThing(submission):
+    devData = submission['devData']
+    thingName = submission['name']
+    headers = submission['headers']
+    endpoint = submission['endpoint']
+    params = submission['params']
+    response = requests.request("POST", panCore.scmConfURL + endpoint, headers=headers, data=json.dumps(devData), params=params)
+    scmErrors = {}
+    if response.status_code == 201:
+        panCore.logging.info(f"\t\tSCM created new object {thingName}.")
+    elif response.status_code == 400:
+        panCore.logging.warning(f"\t\tHTTP 400 encountered trying to create {thingName}.")
+        if '_errors' in response.json().keys():
+            if type(response.json()['_errors']) == list:
+                errorCount = len(response.json()['_errors'])
+                if 'details' in response.json()['_errors'][0].keys():
+                    if type(response.json()['_errors'][0]['details']) == list:
+                        panCore.logging.warning(f"Failed to create {thingName} due to {response.json()['_errors'][0]['details']}")
+                        scmErrors['otherError'][thingName] = {'errorType': 'weird list response',
+                                                                     'message': response.json()['_errors'][0]['details']}
+                    elif 'errorType' in response.json()['_errors'][0]['details'].keys():
+                        if response.json()['_errors'][0]['details']['errorType'] == 'Object Already Exists':
+                            panCore.logging.warning(f"Failed to create {thingName} as it already exists.")
+                            scmErrors['alreadyExists'].append(thingName)
+                        elif response.json()['_errors'][0]['details']['errorType'] == 'Invalid Object':
+                            if 'is not a valid reference>' in response.json()['_errors'][0]['details']['message'][0]:
+                                invalidReference = response.json()['_errors'][0]['details']['message'][0].split("'")[1]
+                                panCore.logging.warning(f"\tFailed to create {thingName} as SCM believes it contains an invalid reference: {invalidReference}.")
+                                scmErrors['invalidReference'][thingName] = {'errorType': response.json()['_errors'][0]['details']['errorType'],
+                                                                                   'message': response.json()['_errors'][0]['details']['message'],
+                                                                                   'invalidReference': invalidReference}
+                            else:
+                                panCore.logging.warning(f"Failed to create {thingName} as SCM believes it's invalid. (Message Details Below):")
+                                panCore.logging.warning(response.json()['_errors'][0]['details']['message'])
+                                scmErrors['invalidObject'][thingName] = {'errorType': response.json()['_errors'][0]['details']['errorType'],
+                                                                                'message': response.json()['_errors'][0]['details']['message']}
+                        else:
+                            panCore.logging.warning(f"Unexpected HTTP 400 error encountered.")
+                            scmErrors['otherError'][thingName] = {'errorType': response.json()['_errors'][0]['details']['errorType'],
+                                                                         'message': response.json()['_errors'][0]['details']['message']}
+        else:
+            panCore.logging.warning(f"HTTP 400 received without _errors populated.")
+            scmErrors['nonErrorResponse'][thingName] = response.json()
+    else:
+        panCore.logging.error("Unexpected HTTP status code encountered. HTTP status and JSON to follow:")
+        panCore.logging.error(response.status_code)
+        panCore.logging.error(response.json())
+    return scmErrors
 
 def postAntivirusWildfire(source, destination):
     print("SCM not implemented yet...")
+
 
 def getRegions():
     headers, tokenExpiryTime = panCore.getSCM_Token(panCore.scmUser, panCore.scmPass, panCore.scmTSG)
@@ -734,22 +803,24 @@ def getRegions():
     response = requests.request("GET", panCore.scmConfURL + "/regions", headers=headers, data={}, params=params)
     return response
 
+
 def getDynamicUserGroups():
     headers, tokenExpiryTime = panCore.getSCM_Token(panCore.scmUser, panCore.scmPass, panCore.scmTSG)
     params = {'folder': 'All'}
     response = requests.request("GET", panCore.scmConfURL + "/dynamic-user-groups", headers=headers, data={}, params=params)
     return response
 
+
 def getThingFromSCM(thing, folder):
     headers, tokenExpiryTime = panCore.getSCM_Token(panCore.scmUser, panCore.scmPass, panCore.scmTSG)
     params = {'folder': folder}
     return requests.request("GET", f"{panCore.scmConfURL}/{thing}", headers=headers, data={}, params=params)
 
+
 def temp():
     headers, tokenExpiryTime = panCore.getSCM_Token(panCore.scmUser, panCore.scmPass, panCore.scmTSG)
     response = requests.request("GET", panCore.scmConfURL + "/applications", headers=headers, data={},
                                 params={'folder': "Shared", 'offset': '4380'})
-
 
 
 parser = argparse.ArgumentParser(
@@ -762,7 +833,11 @@ parser.add_argument('-L', '--logfile', help="Log file to store log output to.", 
 parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
 parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='SCM-Migration.xlsx')
 parser.add_argument('-S', '--noShared', help='Disable importing Shared objects', default=False, action='store_true')
-parser.add_argument('-d', '--deviceGroups', help='CSV of device group:folder pairings', default="GlobalProtect_Azure:Shared,GP_Americas:Shared,GlobalProtect_External:All")
+parser.add_argument('-F', '--sharedFolder', help='Destination folder for Panorama "shared" scope objects', default='All')
+# NOTE: SCM uses folder "All" to describe config scope of "Global" folder.
+# to write to "Global" as shown in GUI use "All"
+# to write to "Prisma Access" config scope use "Shared"
+parser.add_argument('-d', '--deviceGroups', help='CSV of device group:folder pairings', default="GlobalProtect_Azure:Shared,GP_Americas:Shared")
 parser.add_argument('-z', '--zoneMap', help='Replace zone names for SCM compatibility', default='TRUST:trust,Trust:trust,INTERNET:untrust,GLOBALPROTECT:trust')
 args = parser.parse_known_args()
 
@@ -824,7 +899,7 @@ panCore.logging.info("Posting tag data to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postTags(pano_obj, 'All')
+    postTags(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postTags(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
@@ -832,7 +907,7 @@ panCore.logging.info("Posting address data to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postAddresses(pano_obj, 'All')
+    postAddresses(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postAddresses(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
@@ -841,7 +916,7 @@ errObjects = {}
 if args[0].noShared:
     pass
 else:
-    errObjects.update(postAddressGroups(pano_obj, 'Shared'))
+    errObjects.update(postAddressGroups(pano_obj, args[0].sharedFolder))
 for dgPair in args[0].deviceGroups.split(","):
     errObjects.update(postAddressGroups(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1]))
 
@@ -849,7 +924,7 @@ panCore.logging.info("Posting Regions to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postRegions(pano_obj, 'All')
+    postRegions(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postRegions(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
@@ -857,7 +932,7 @@ panCore.logging.info("Posting App-ID data to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postApps(pano_obj, 'All')
+    postApps(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postApps(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
@@ -865,7 +940,7 @@ panCore.logging.info("Posting App-ID groups to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postAppGroups(pano_obj, 'All')
+    postAppGroups(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postAppGroups(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
@@ -873,7 +948,7 @@ panCore.logging.info("Posting App-ID filters to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postAppFilters(pano_obj, 'All')
+    postAppFilters(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postAppFilters(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
@@ -881,7 +956,7 @@ panCore.logging.info("Posting service objects to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postService(pano_obj, 'All')
+    postService(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postService(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
@@ -889,7 +964,7 @@ panCore.logging.info("Posting service groups to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postServiceGroup(pano_obj, 'All')
+    postServiceGroup(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postServiceGroup(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
@@ -898,7 +973,7 @@ panCore.logging.info("Posting custom URL objects to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postURLs(pano_obj, 'All')
+    postURLs(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postURLs(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
@@ -907,7 +982,7 @@ panCore.logging.info("Posting Dynamic User Groups to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postDynamicUserGroups(pano_obj, 'All')
+    postDynamicUserGroups(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postDynamicUserGroups(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
@@ -916,7 +991,7 @@ panCore.logging.info("Posting External Dynamic Lists to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postEDLs(pano_obj, 'All')
+    postEDLs(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postEDLs(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
@@ -925,9 +1000,10 @@ panCore.logging.info("Posting Schedules to SCM:\n")
 if args[0].noShared:
     pass
 else:
-    postSchedules(pano_obj, 'All')
+    postSchedules(pano_obj, args[0].sharedFolder)
 for dgPair in args[0].deviceGroups.split(","):
     postSchedules(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
+
 
 """"
     2023-12-29
@@ -942,21 +1018,22 @@ else:
         print(avProfile)
 """
 
+
 panCore.logging.info("Posting security policies to SCM:\n")
 if args[0].noShared:
     pass
 else:
     preRules = panos.policies.PreRulebase().refreshall(pano_obj)
     if preRules: # Don't try to import an empty list of rules.
-        postSecurityPolicies(preRules[0], 'pre', "Shared") # select the rulebase from the list of rulebases returned
+        processRulebasePolicies(preRules[0], 'pre', "Shared") # select the rulebase from the list of rulebases returned
     postRules = panos.policies.PostRulebase().refreshall(pano_obj)
     if postRules:
-        postSecurityPolicies(postRules[0], 'post', 'Shared')
+        processRulebasePolicies(postRules[0], 'post', 'Shared')
 for dgPair in args[0].deviceGroups.split(","):
     dg_obj, destination = pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1]
     preRules = panos.policies.PreRulebase().refreshall(dg_obj)
     if preRules:  # Don't try to import an empty list of rules.
-        postSecurityPolicies(preRules[0], context='pre', destination=destination)  # select the rulebase from the list of rulebases returned
+        processRulebasePolicies(preRules[0], context='pre', destination=destination)  # select the rulebase from the list of rulebases returned
     postRules = panos.policies.PostRulebase().refreshall(dg_obj)
     if postRules:  # Don't try to import an empty list of rules.
-        postSecurityPolicies(postRules[0], context='post', destination=destination)  # select the rulebase from the list of rulebases returned
+        processRulebasePolicies(postRules[0], context='post', destination=destination)  # select the rulebase from the list of rulebases returned

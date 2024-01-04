@@ -17,6 +17,7 @@ Changelog
 2023-02-27 - Typos in memo/comment fields of configStart()
 2023-12-26 - Incorporate Strata Cloud Manager auth token generation
 2023-12-29 - Update configStart() to standardize keys and changed to programmatic for (_varName in varList exec()) method of building variables.
+2024-01-04 - Eliminated regression bug in configStart where passwords were not being decoded when retrieved from environment variables
 
 Goals
 1.  Re-implement "headless" support. Vestigial elements from prior 'headless mode' exist in this code base but the
@@ -404,12 +405,18 @@ def configStart(headless=False, configStorage='panCoreConfig.json'):
             # Variables will be created as "None" type if environment variable doesn't exist.
             # Delete them if that occurs to avoid breaking other tests (e.g. connect w/ API key
             # if username doesn't exist.)
-            exec(f"global panAddress, panUser, panPass, panKey, scmUser, scmPass, scmTSG\n"
-                 f"{_varName} = os.environ.get('{config['environmentVariables'][_varName]}')\n"
-                 f"if {_varName} == None:\n"
-                 f"\tdel {_varName}\n"
-                 f"else:\n"
-                 f"\tlogger.info('\t{_varName} retrieved.')")
+            if _varName.endswith('Pass'):
+                exec(f"global panPass, scmPass\n"
+                     f"temp = os.environ.get('{config['environmentVariables'][_varName]}')\n"
+                     f"if temp is not None:\n"
+                     f"\t{_varName} = str(decodePass(temp), encoding='utf-8')")
+            else:
+                exec(f"global panAddress, panUser, panKey, scmUser, scmTSG\n"
+                     f"{_varName} = os.environ.get('{config['environmentVariables'][_varName]}')\n"
+                     f"if {_varName} == None:\n"
+                     f"\tdel {_varName}\n"
+                     f"else:\n"
+                     f"\tlogger.info('\t{_varName} retrieved.')")
         logger.info('Done getting environmentVariables.')
         #print(panAddress)
         #if not panAddress and not scmUser:
