@@ -26,6 +26,8 @@ Goals:
     the last file type in the profile.
  -  Add "URL Categories & Groups" header to "ProfileList" so the reason device groups without other profiles
     were added to the list is more obvious (Probably just a "Present" flag...)
+ -  Incorporate 'source_obj' as well as 'confPath' for each function. Finish splitting main() from other functions and create
+    two calling 'utility' files so fw_obj or pano_obj can be processed depending on use case.
 
 """
 
@@ -569,7 +571,7 @@ def buildAll(confPath):
     return devData
 
 if __name__ == "__main__":
-    # Code to run if executed as a free standing script rather than imported:
+    # Code to run if executed as a freestanding script rather than imported:
     dgCount = len(deviceGroups)
     dgNum = 1
     startTime = datetime.datetime.now(datetime.timezone.utc)
