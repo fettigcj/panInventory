@@ -76,6 +76,9 @@ def scmCredPrompt():
     return scmCreds
 
 def getSCM_Token(scmUser, scmPass, scmTSG):
+    global scmToken, tokenExpiryTime
+    # Store token & expiry time in pancore's memory space to support
+    # multi-threading efforts in calling scripts.
     headers = {'Content-Type': 'application/x-www-form-urlencoded',
                'Accept': 'application/json'}
     data = {
@@ -83,14 +86,16 @@ def getSCM_Token(scmUser, scmPass, scmTSG):
         'scope': f'profile tsg_id:{scmTSG} email'}
     response = requests.post(url=scmAuthURL, headers=headers, data=data, auth=(scmUser,scmPass))
     if response.status_code == 200:
+        logging.info("Refreshed oAuth token.")
         scmToken = response.json()['access_token']
         headers = {'Content-Type': 'application/json',
                    'Authorization': f'Bearer {scmToken}'}
-        tokenExpiryTime = time.time() + 60 * 14
+        tokenExpiryTime = time.time() + (60 * 13)
         return headers, tokenExpiryTime
     else:
         logging.error("Did not receive proper SCM token.")
-        return response, time.time() #Return HTTP response and current time as 'expiry' time to force re-key.
+        tokenExpiryTime = time.time()
+        return response, tokenExpiryTime #Return HTTP response and current time as 'expiry' time to force re-key.
 
 def panoCredPrompt():
     panCreds = {}
@@ -216,7 +221,7 @@ def configStart(headless=False, configStorage='panCoreConfig.json'):
                 "scmPass": "scmPass",
                 "scmTSG": "scmTSG"}
         }
-        print("There are three options for storing how to access Panorama. Locally in an INI file is the simplest, "
+        print("There are three options for storing how to access Panorama. Locally in an JSON file is the simplest, "
               "but also the least secure. Environment variables are next simplest, but may not scale well. If your "
               "environment has a panscan database that this system can access those credentials may be retrieved as a "
               "third option."

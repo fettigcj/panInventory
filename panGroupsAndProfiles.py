@@ -28,6 +28,7 @@ Goals:
     were added to the list is more obvious (Probably just a "Present" flag...)
  -  Incorporate 'source_obj' as well as 'confPath' for each function. Finish splitting main() from other functions and create
     two calling 'utility' files so fw_obj or pano_obj can be processed depending on use case.
+ -  Color code URL objects in URL filtering profile report for 'predefined' vs 'custom' URL object.
 
 """
 
