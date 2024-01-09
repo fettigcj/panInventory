@@ -31,20 +31,20 @@ Changelog
     Replaced "postSecurityPolicies(" with "processRulebasePolicies(" since pan-os-python co-mingles all policy types.
 
 2024-01-05:
-    Added threading & thread queue functions to accelerate write operations
+    Added threading & thread queue functions to accelerate write operations, broke object construction from object
+    writes so postThing() could be called to post any object type and consolidate HTTP error handling to single
+    function's code
 
 Future Goals:
     panCore.getSCM_Token() will return HTTP response in the event of a fault, along with a token 'expiry' time of the current time.
     Need to write error handling to either log-and-exit or otherwise handle faults.
-    Suspect that returning CURRENT time as expiry time will create a loop since this script will re-try key generation upon reaching expiry time.
+    Current mechanism is to force re-try by returning current time as expiry time. Concerned that that will create an
+    infinite loop since this script will re-try key generation and never escape.
 
     Currently nested groups will error out on first run, but be created properly in a subsequent run.
     Would like to create a way to detect missing members and force groups which contain groups to be created last.
 
     Create a method to update an object when it already exists rather than simply reporting "Object Already Exists"
-
-    Create postData() function for other functions to call to relegate decoding HTTP 201 / 400 / 401 etc codes to
-    shared code instead of copy-paste stuff that needs to be separately maintained.
 
     Add while errors() loop to eliminate objects w/ errors (Address groups w/ missing nested members get rejected until nested member created)
 
@@ -59,15 +59,15 @@ Functionality Notes / Warnings:
 from pancore import panCore, panExcelStyles
 import panGroupsAndProfiles
 #Import stock/public library modules
-import sys, datetime, xlsxwriter, argparse, re, time, panos, requests, json, threading
+import sys, datetime, xlsxwriter, argparse, re, time, panos, requests, json, threading, copy
 from threading import Thread
 
 
 def postTags(source, destination):  # pan-os-python object to copy from and SCM folder to post to
-    panCore.logging.info(f"\t\tRetrieving tag data from source: {source}")
+    panCore.logging.info(f"\tRetrieving tag data from source: {source}")
     tags = panos.objects.Tag.refreshall(source)
     tagCount = len(tags)
-    panCore.logging.info(f"\t\tRetrieved {tagCount} tags.")
+    panCore.logging.info(f"\tRetrieved {tagCount} tags.")
     tagNum = 1
     jobs = []
     for tag_obj in tags:
@@ -79,19 +79,25 @@ def postTags(source, destination):  # pan-os-python object to copy from and SCM 
         submission = {
             'devData': devData,
             'thingName': tag_obj.name,
+            'thingPath': tag_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/tags",
             'params': {'folder': destination}}
         jobs.append(Thread(target=postThing, args=(submission,)))
         tagNum += 1
+    if '/tags' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/tags'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 
+def validateTag(devData):
+    print('cebu')
+
 def postAddresses(source, destination):
-    panCore.logging.info(f"\t\tRetrieving Address data from source: {source}")
+    panCore.logging.info(f"\tRetrieving Address data from source: {source}")
     addresses = panos.objects.AddressObject().refreshall(source)
     addressCount = len(addresses)
-    panCore.logging.info(f"\t\tRetrieved {addressCount} addresses.")
+    panCore.logging.info(f"\tRetrieved {addressCount} addresses.")
     addressNum = 1
     jobs = []
     for addr_obj in addresses:
@@ -104,23 +110,26 @@ def postAddresses(source, destination):
         submission = {
             'devData': devData,
             'thingName': addr_obj.name,
+            'thingPath': addr_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/addresses",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         addressNum += 1
+    if '/addresses' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/addresses'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 def postAddressGroups(source, destination):
     panCore.logging.info(f"\tRetrieving Address data from source: {source}")
     addresses = panos.objects.AddressGroup().refreshall(source)
     addressCount = len(addresses)
-    panCore.logging.info(f"\t\tRetrieved {addressCount} address groups.")
+    panCore.logging.info(f"\tRetrieved {addressCount} address groups.")
     addressNum = 1
     jobs = []
     for addr_obj in addresses:
         if addr_obj.dynamic_value is not None:
-            panCore.logging.info(f"{addr_obj.name} is a dynamic object.")
+            panCore.logging.info(f"\t\t{addr_obj.name} is a dynamic object.")
         devData = {'name': addr_obj.name,
                    **({'dynamic': {'filter': addr_obj.dynamic_value}} if addr_obj.dynamic_value is not None else {}),
                    **({'static': addr_obj.static_value} if addr_obj.static_value is not None else {}),
@@ -131,18 +140,21 @@ def postAddressGroups(source, destination):
         submission = {
             'devData': devData,
             'thingName': addr_obj.name,
+            'thingPath': addr_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/address-groups",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         addressNum += 1
+    if '/address-groups' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/address-groups'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 def postRegions(source, destination):
     panCore.logging.info(f"\tRetrieving Region data from source: {source}")
     regions = panos.objects.Region().refreshall(source)
     regionCount = len(regions)
-    panCore.logging.info(f"\t\tRetrieved {regionCount} regions.")
+    panCore.logging.info(f"\tRetrieved {regionCount} regions.")
     regionNum = 1
     jobs = []
     for region_obj in regions:
@@ -152,22 +164,25 @@ def postRegions(source, destination):
             devData['geo_location'] = {
                 'latitude': region_obj.latitude,
                 'longitude': region_obj.longitude}
-        panCore.logging.info(f"got info for region object {region_obj.name}. Posting to SCM... (Region {regionNum}/{regionCount}")
+        panCore.logging.info(f"\t\tGot info for region object {region_obj.name}. Posting to SCM... (Region {regionNum}/{regionCount}")
         submission = {
             'devData': devData,
             'thingName': region_obj.name,
+            'thingPath': region_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/regions",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         regionNum += 1
+    if '/regions' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/regions'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 def postApps(source, destination):
     panCore.logging.info(f"\tRetrieving Application data from source: {source}")
     apps = panos.objects.ApplicationObject().refreshall(source)
     appCount = len(apps)
-    panCore.logging.info(f"\t\tRetrieved {appCount} addresses.")
+    panCore.logging.info(f"\tRetrieved {appCount} Applications.")
     appNum = 1
     jobs = []
     for app_obj in apps:
@@ -240,18 +255,21 @@ def postApps(source, destination):
         submission = {
             'devData': devData,
             'thingName': app_obj.name,
+            'thingPath': app_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/applications",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         appNum += 1
+    if '/applications' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/applications'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 def postAppGroups(source, destination):
     panCore.logging.info(f"\tRetrieving Application Group data from source: {source}")
     groups = panos.objects.ApplicationGroup().refreshall(source)
     groupCount = len(groups)
-    panCore.logging.info(f"\t\tRetrieved {groupCount} groups.")
+    panCore.logging.info(f"\tRetrieved {groupCount} groups.")
     grpNum = 1
     jobs = []
     for grp_obj in groups:
@@ -263,11 +281,14 @@ def postAppGroups(source, destination):
         submission = {
             'devData': devData,
             'thingName': grp_obj.name,
+            'thingPath': grp_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/application-groups",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         grpNum += 1
+    if '/application-groups' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/application-groups'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 
@@ -275,7 +296,7 @@ def postAppFilters(source, destination):
     panCore.logging.info(f"\tRetrieving Application filters from source: {source}")
     filters = panos.objects.ApplicationFilter().refreshall(source)
     filterCount = len(filters)
-    panCore.logging.info(f"\t\tRetrieved {filterCount} groups.")
+    panCore.logging.info(f"\tRetrieved {filterCount} groups.")
     filterNum = 1
     jobs = []
     for filter_obj in filters:
@@ -294,22 +315,25 @@ def postAppFilters(source, destination):
                    **({'has_known_vulnerabilities': True} if filter_obj.has_known_vulnerabilities is not None else {}),
                    **({'pervasive': True} if filter_obj.pervasive is not None else {}),
                    **({'tagging': {'tag': filter_obj.tag}} if filter_obj.tag is not None else {})}
-        panCore.logging.info(f"\tgot info for App-ID group {filter_obj.name}. Posting to SCM... (group {filterNum}/{filterCount}")
+        panCore.logging.info(f"\t\tgot info for App-ID group {filter_obj.name}. Posting to SCM... (group {filterNum}/{filterCount}")
         submission = {
             'devData': devData,
             'thingName': filter_obj.name,
+            'thingPath': filter_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/application-filters",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         filterNum += 1
+    if '/application-filters' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/application-filters'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 def postService(source, destination):
     panCore.logging.info(f"\tRetrieving service objects from source: {source}")
     services = panos.objects.ServiceObject().refreshall(source)
     svcCount = len(services)
-    panCore.logging.info(f"\tRetrieved {svcCount} groups.")
+    panCore.logging.info(f"\tRetrieved {svcCount} services.")
     serviceNum = 1
     jobs = []
     for svc_obj in services:
@@ -326,19 +350,22 @@ def postService(source, destination):
                 **({'halfclose_timeout': svc_obj.override_half_close_timeout} if svc_obj.override_half_close_timeout is not None else {}),
                 **({'timewait_timeout': svc_obj.override_time_wait_timeout} if svc_obj.override_time_wait_timeout is not None else {})
                 }
-        panCore.logging.info(f"\tgot info for service object {svc_obj.name}. Posting to SCM... (Service {serviceNum}/{svcCount})")
+        panCore.logging.info(f"\t\tgot info for service object {svc_obj.name}. Posting to SCM... (Service {serviceNum}/{svcCount})")
         submission = {
             'devData': devData,
             'thingName': svc_obj.name,
+            'thingPath': svc_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/services",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         serviceNum += 1
+    if '/services' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/services'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 def postServiceGroup(source, destination):
-    panCore.logging.info(f"Retrieving service objects from source: {source}")
+    panCore.logging.info(f"\tRetrieving service groups from source: {source}")
     serviceGroups = panos.objects.ServiceGroup().refreshall(source)
     grpCount = len(serviceGroups)
     panCore.logging.info(f"\tRetrieved {grpCount} service objects.")
@@ -349,19 +376,22 @@ def postServiceGroup(source, destination):
                    **({'members': grp_obj.value} if grp_obj.value is not None else {}),
                    **({'tag': grp_obj.tag} if grp_obj.tag is not None else {})
                    }
-        panCore.logging.info(f"\tgot info for service group {grp_obj.name}. Posting to SCM... (Service {grpNum}/{grpCount})")
+        panCore.logging.info(f"\t\tgot info for service group {grp_obj.name}. Posting to SCM... (Service {grpNum}/{grpCount})")
         submission = {
             'devData': devData,
             'thingName': grp_obj.name,
+            'thingPath': grp_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/service-groups",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         grpNum += 1
+    if '/service-groups' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/service-groups'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 def postURLs(source, destination):
-    panCore.logging.info(f"Retrieving custom URL objects from source: {source}")
+    panCore.logging.info(f"\tRetrieving custom URL objects from source: {source}")
     URLs = panos.objects.CustomUrlCategory().refreshall(source)
     URL_Count = len(URLs)
     panCore.logging.info(f"\tRetrieved {URL_Count} URL objects.")
@@ -373,19 +403,22 @@ def postURLs(source, destination):
                    **({'description': url_obj.description} if url_obj.description is not None else {}),
                    **({'list': url_obj.url_value} if url_obj.url_value is not None else {})
                    }
-        panCore.logging.info(f"\tgot info for custom URL objects {url_obj.name}. Posting to SCM... (URL {URL_Num}/{URL_Count})")
+        panCore.logging.info(f"\t\tgot info for custom URL objects {url_obj.name}. Posting to SCM... (URL {URL_Num}/{URL_Count})")
         submission = {
             'devData': devData,
             'thingName': url_obj.name,
+            'thingPath': url_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/url-categories",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         URL_Num += 1
+    if '/url-categories' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/url-categories'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 def postDynamicUserGroups(source, destination):
-    panCore.logging.info(f"Retrieving dynamic user groups from source: {source}")
+    panCore.logging.info(f"\tRetrieving dynamic user groups from source: {source}")
     groups = panos.objects.DynamicUserGroup().refreshall(source)
     grpCount = len(groups)
     panCore.logging.info(f"\tRetrieved {grpCount} dynamic user groups.")
@@ -401,22 +434,25 @@ def postDynamicUserGroups(source, destination):
                    **({'filter': grp_obj.filter} if grp_obj.filter is not None else {}),
                    **({'tag': grp_obj.tag} if grp_obj.tag is not None else {})
                    }
-        panCore.logging.info(f"\tgot info for custom URL objects {grp_obj.name}. Posting to SCM... (URL {grpNum}/{grpCount})")
+        panCore.logging.info(f"\t\tgot info for custom URL objects {grp_obj.name}. Posting to SCM... (URL {grpNum}/{grpCount})")
         submission = {
             'devData': devData,
             'thingName': grp_obj.name,
+            'thingPath': grp_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/dynamic-user-groups",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         grpNum += 1
+    if '/dynamic-user-groups' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/dynamic-user-groups'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 def postEDLs(source, destination):
     panCore.logging.info(f"\tRetrieving EDLs from source: {source}")
     EDLs = panos.objects.Edl().refreshall(source)
     edlCount = len(EDLs)
-    panCore.logging.info(f"\t\tRetrieved {edlCount} EDLs.")
+    panCore.logging.info(f"\tRetrieved {edlCount} EDLs.")
     edlNum = 1
     jobs = []
     for edl_obj in EDLs:
@@ -439,18 +475,21 @@ def postEDLs(source, destination):
         submission = {
             'devData': devData,
             'thingName': edl_obj.name,
+            'thingPath': edl_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/external-dynamic-lists",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         edlNum += 1
+    if '/external-dynamic-lists' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/external-dynamic-lists'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 
 def postSchedules(source, destination):
     panCore.logging.info(f"\tRetrieving schedule objects from source: {source}")
     schedules = panos.objects.ScheduleObject().refreshall(source)
     schedCount = len(schedules)
-    panCore.logging.info(f"\t\tRetrieved {schedCount} schedule objects.")
+    panCore.logging.info(f"\tRetrieved {schedCount} schedule objects.")
     schedNum = 1
     jobs = []
     for sched_obj in schedules:
@@ -473,11 +512,14 @@ def postSchedules(source, destination):
         submission = {
             'devData': devData,
             'thingName': sched_obj.name,
+            'thingPath': sched_obj.xpath(),
             'headers': {'Content-Type': 'application/json'},
             'endpoint': "/schedules",
             'params': {'folder': destination}}
         jobs.append(threading.Thread(target=postThing, args=(submission,)))
         schedNum += 1
+    if '/schedules' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/schedules'] = copy.deepcopy(postThingResultsTemplate)
     runJobs(jobs)
 def postSecurityRules(rule_obj, context, destination, logDest='Cortex Data Lake'):
     devData = {'name': rule_obj.name,
@@ -509,18 +551,20 @@ def postSecurityRules(rule_obj, context, destination, logDest='Cortex Data Lake'
     submission = {
         'devData': devData,
         'thingName': rule_obj.name,
+        'thingPath': rule_obj.xpath(),
         'headers': {'Content-Type': 'application/json'},
         'endpoint': "/security-rules",
         'params': {'folder': destination,
                    'position': context}}
-    scmErorrs = postThing(submission)
-    return scmErorrs
+    if '/security-rules' not in panCore.postThingResults.keys():
+        panCore.postThingResults['/security-rules'] = copy.deepcopy(postThingResultsTemplate)
+    postThing(submission)
 
 def processRulebasePolicies(ruleBase, context, destination, logDest='Cortex Data Lake'):
     # HTTP post to SCM to create security policy in specified Pre- or Post- context in destination folder.
     ruleNum = 1
     ruleCount = len(ruleBase.children)
-    panCore.logging.info(f"\t\tRetrieved {ruleCount} policies.")
+    panCore.logging.info(f"\tRetrieved {ruleCount} policies.")
     jobs = []
     for rule_obj in ruleBase.children:
         if isinstance(rule_obj, panos.policies.ApplicationOverride):
@@ -534,7 +578,7 @@ def processRulebasePolicies(ruleBase, context, destination, logDest='Cortex Data
         if isinstance(rule_obj, panos.policies.PolicyBasedForwarding):
             print('PolicyBasedForwarding')
         if isinstance(rule_obj, panos.policies.SecurityRule):
-            panCore.logging.info(f"\tgot info for rule {rule_obj.name}. Posting to SCM... (Rule {ruleNum}/{ruleCount})")
+            panCore.logging.info(f"\t\tgot info for rule {rule_obj.name}. Posting to SCM... (Rule {ruleNum}/{ruleCount})")
             jobs.append(Thread(target=postSecurityRules, args=(rule_obj, context, destination, logDest)))
         ruleNum += 1
     runJobs(jobs)
@@ -543,10 +587,12 @@ def processRulebasePolicies(ruleBase, context, destination, logDest='Cortex Data
 def postThing(submission):
     devData = submission['devData']
     thingName = submission['thingName']
+    thingPath = submission['thingPath']
     headers = submission['headers']
     endpoint = submission['endpoint']
     params = submission['params']
     headers['Authorization'] = f"Bearer {panCore.scmToken}"
+    panCore.postThingResults[endpoint]['objectDetails'][thingPath] = {}
     if hasattr(panCore, 'tokenExpiryTime'):
         #currentTime = time.localtime(time.time())
         #expiryTime = time.localtime(panCore.tokenExpiryTime)
@@ -568,69 +614,79 @@ def postThing(submission):
                     time.sleep(1)
                     i += 1
             if time.time() >= panCore.tokenExpiryTime:
-                panCore.logging.error(f"\t\tReceived expired oAuth token. Investigate below HTTP response:\n"
-                                      f"\t\t{resp}")
+                panCore.logging.error(f"\t\t\tReceived expired oAuth token. Investigate below HTTP response:\n"
+                                      f"\t\t\t{resp}")
             else:
                 headers['Authorization'] = f"Bearer {panCore.scmToken}"
     response = requests.request("POST", panCore.scmConfURL + endpoint, headers=headers, data=json.dumps(devData), params=params)
-    scmErrors = {
-        'otherError': {},
-        'alreadyExists': [],
-        'invalidReference': {},
-        'nonErrorResponse': {}
-    }
+    panCore.postThingResults[endpoint]['objectDetails'][thingPath]['Name'] = thingName
+    panCore.postThingResults[endpoint]['objectDetails'][thingPath]['Destination'] = params['folder']
+    panCore.postThingResults[endpoint]['objectDetails'][thingPath]['Config'] = devData
     if response.status_code == 201:
-        panCore.logging.info(f"\t\tSCM created new object {thingName}.")
+        panCore.logging.info(f"\t\t\tSCM created {thingName} in SCM folder {params['folder']} from {thingPath}.")
+        panCore.postThingResults[endpoint]['objectDetails'][thingPath]['Results'] = 'CreatedSuccessfully'
+        panCore.postThingResults[endpoint]['summaries']['createdSuccessfully'][thingPath] = panCore.postThingResults[endpoint]['objectDetails'][thingPath]
     elif response.status_code == 400:
-        panCore.logging.warning(f"\t\tHTTP 400 encountered trying to create {thingName}.")
+        panCore.logging.warning(f"\t\t\tHTTP 400 encountered trying to create {thingName}.")
         if '_errors' in response.json().keys():
             if type(response.json()['_errors']) == list:
                 errorCount = len(response.json()['_errors'])
                 if 'details' in response.json()['_errors'][0].keys():
                     if type(response.json()['_errors'][0]['details']) == list:
-                        panCore.logging.warning(f"Failed to create {thingName} due to {response.json()['_errors'][0]['details']}")
-                        scmErrors['otherError'][thingName] = {'errorType': 'weird list response',
-                                                                     'message': response.json()['_errors'][0]['details']}
+                        panCore.logging.warning(f"\t\t\tFailed to create {thingName} due to {response.json()['_errors'][0]['details']}")
+                        panCore.postThingResults[endpoint]['objectDetails'][thingPath]['Results'] = 'otherError'
+                        panCore.postThingResults[endpoint]['objectDetails'][thingPath]['errMessage'] = response.json()['_errors'][0]['details']
+                        panCore.postThingResults[endpoint]['summaries']['otherError'] = panCore.postThingResults[endpoint]['objectDetails'][thingPath]
                     elif 'errorType' in response.json()['_errors'][0]['details'].keys():
                         if response.json()['_errors'][0]['details']['errorType'] == 'Object Already Exists':
-                            panCore.logging.warning(f"Failed to create {thingName} as it already exists.")
-                            scmErrors['alreadyExists'].append(thingName)
+                            panCore.logging.warning(f"\t\t\tFailed to create {thingName} as it already exists.")
+                            panCore.postThingResults[endpoint]['objectDetails'][thingPath]['Results'] = 'AlreadyExists'
+                            panCore.postThingResults[endpoint]['objectDetails'][thingPath]['errMessage'] = response.json()['_errors'][0]['details']
+                            panCore.postThingResults[endpoint]['summaries']['alreadyExists'][thingPath] = panCore.postThingResults[endpoint]['objectDetails'][thingPath]
                         elif response.json()['_errors'][0]['details']['errorType'] == 'Invalid Object':
                             if 'is not a valid reference>' in response.json()['_errors'][0]['details']['message'][0]:
                                 invalidReference = response.json()['_errors'][0]['details']['message'][0].split("'")[1]
-                                panCore.logging.warning(f"\tFailed to create {thingName} as SCM believes it contains an invalid reference: {invalidReference}.")
-                                scmErrors['invalidReference'][thingName] = {'errorType': response.json()['_errors'][0]['details']['errorType'],
-                                                                                   'message': response.json()['_errors'][0]['details']['message'],
-                                                                                   'invalidReference': invalidReference}
+                                panCore.logging.warning(f"\t\t\tFailed to create {thingName} as SCM believes it contains an invalid reference: {invalidReference}.")
+                                panCore.postThingResults[endpoint]['objectDetails'][thingPath]['Results'] = 'invalidReference'
+                                panCore.postThingResults[endpoint]['objectDetails'][thingPath]['errMessage'] = response.json()['_errors'][0]['details']
+                                panCore.postThingResults[endpoint]['summaries']['invalidReference'][thingPath] = panCore.postThingResults[endpoint]['objectDetails'][thingPath]
                             else:
-                                panCore.logging.warning(f"Failed to create {thingName} as SCM believes it's invalid. (Message Details Below):")
-                                panCore.logging.warning(response.json()['_errors'][0]['details']['message'])
-                                scmErrors['invalidObject'][thingName] = {'errorType': response.json()['_errors'][0]['details']['errorType'],
-                                                                                'message': response.json()['_errors'][0]['details']['message']}
+                                panCore.logging.warning(f"\t\t\tFailed to create {thingName} as SCM believes it's invalid. (Message Details Below):")
+                                panCore.logging.warning("\t\t\t".join(response.json()['_errors'][0]['details']['message']))
+                                panCore.postThingResults[endpoint]['objectDetails'][thingPath]['Results'] = 'invalidObject'
+                                panCore.postThingResults[endpoint]['objectDetails'][thingPath]['errMessage'] = response.json()['_errors'][0]['details']
+                                panCore.postThingResults[endpoint]['summaries']['invalidObject'][thingPath] = panCore.postThingResults[endpoint]['objectDetails'][thingPath]
                         else:
-                            panCore.logging.warning(f"Unexpected HTTP 400 error encountered.")
-                            scmErrors['otherError'][thingName] = {'errorType': response.json()['_errors'][0]['details']['errorType'],
-                                                                         'message': response.json()['_errors'][0]['details']['message']}
+                            panCore.logging.warning(f"\t\t\tFailed to create {thingName} but no anticipated error was given. See details below:")
+                            panCore.logging.warning("\t\t\t".join(response.json()['_errors'][0]['details']['message']))
+                            panCore.postThingResults[endpoint]['objectDetails'][thingPath]['Results'] = 'UnexpectedError'
+                            panCore.postThingResults[endpoint]['objectDetails'][thingPath]['errMessage'] = response.json()['_errors'][0]['details']
+                            panCore.postThingResults[endpoint]['summaries']['unexpectedError'][thingPath] = panCore.postThingResults[endpoint]['objectDetails'][thingPath]
         else:
-            panCore.logging.warning(f"HTTP 400 received without _errors populated.")
-            scmErrors['nonErrorResponse'][thingName] = response.json()
+            panCore.logging.warning(f"\t\t\tHTTP 400 received without _errors populated.")
+            panCore.logging.warning(f"\t\t\t".join(response.text))
+            panCore.postThingResults[endpoint]['objectDetails'][thingPath]['Results'] = 'nonErrorFailure'
+            panCore.postThingResults[endpoint]['objectDetails'][thingPath]['httpReponse'] = response.text
+            panCore.postThingResults[endpoint]['summaries']['nonErrorResponse'][thingName] = panCore.postThingResults[endpoint]['objectDetails'][thingPath]
     else:
-        panCore.logging.error("Unexpected HTTP status code encountered. HTTP status and JSON to follow:")
+        panCore.logging.error("\t\t\tUnexpected HTTP status code encountered. HTTP status and message text to follow:")
+        panCore.postThingResults[endpoint]['objectDetails'][thingPath]['Results'] = 'UnexpectedHTTP_Code'
+        panCore.postThingResults[endpoint]['objectDetails'][thingPath]['httpCode'] = response.status_code
+        panCore.postThingResults[endpoint]['objectDetails'][thingPath]['httpReponse'] = response.text
+        panCore.postThingResults[endpoint]['summaries']['unexepectedHTTP_Code'] = panCore.postThingResults[endpoint]['objectDetails'][thingPath]
         panCore.logging.error(response.status_code)
-        panCore.logging.error(response.json())
-    return scmErrors
-
-
+        panCore.logging.error(response.text)
 
 def runJobs(jobs):
     # Various functions build a list of jobs/threads. This function releases them in a
     # controlled fashion to avoid overloading the SCM API and triggering its flood protections.
+    # to be replaced by proper thread queuing at some point....
     activeThreadsBefore = threading.active_count()
     jobsDone = []
     jobCount = len(jobs)
     i = 1
     for job in jobs:
-        panCore.logging.info(f'Submitting job {i}/{jobCount}. Current thread count: {threading.active_count()}')
+        panCore.logging.info(f'\tSubmitting job {job.name} ({i}/{jobCount}). Current thread count: {threading.active_count()}')
         while threading.active_count() >= activeThreadsBefore + args[0].limitThreads:
             panCore.logging.info(f"\t\t****** WAIT STATE ****\n"
                                  f"\t\tWaiting for other threads to finish... Current thread count: {threading.active_count()}")
@@ -867,6 +923,20 @@ colorCodes = {
     'color42': 'Chestnut'
     }
 
+panCore.postThingResults = {}
+postThingResultsTemplate = {'objectDetails': {},
+                            'summaries': {
+                                'createdSuccessfully': {},
+                                'otherError': {},
+                                'alreadyExists': {},
+                                'invalidReference': {},
+                                'invalidObject': {},
+                                'unexpectedError': {},
+                                'nonErrorResponse': {},
+                                'unexpectedHTTP_Code': {}
+                            }}
+
+
 
 
 if __name__ == "__main__":
@@ -880,7 +950,7 @@ if __name__ == "__main__":
     parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='SCM-Migration.xlsx')
     parser.add_argument('-S', '--noShared', help='Disable importing Shared objects', default=False, action='store_true')
     parser.add_argument('-F', '--sharedFolder', help='Destination folder for Panorama "shared" scope objects', default='All')
-    parser.add_argument('-T', '--limitThreads', help="Limit number of threads to prevent overwhelming API destination", default=75)
+    parser.add_argument('-T', '--limitThreads', help="Limit number of threads to prevent overwhelming API destination", default=100)
     parser.add_argument('-W', '--Wait', help="Seconds to wait before starting next batch of threads in multi-threaded operations.", default=2)
     # NOTE: SCM uses folder "All" to describe config scope of "Global" folder.
     # to write to "Global" as shown in GUI use "All"
@@ -901,6 +971,7 @@ if __name__ == "__main__":
 
 
     panCore.getSCM_Token(panCore.scmUser, panCore.scmPass, panCore.scmTSG)
+
 
     panCore.logging.info("Posting tag data to SCM:\n")
     if args[0].noShared:
@@ -1042,3 +1113,57 @@ if __name__ == "__main__":
         postRules = panos.policies.PostRulebase().refreshall(dg_obj)
         if postRules:  # Don't try to import an empty list of rules.
             processRulebasePolicies(postRules[0], context='post', destination=destination)  # select the rulebase from the list of rulebases returned
+
+
+panCore.initXLSX(args[0].workbookname)
+for scmEndpoint in panCore.postThingResults.keys():
+    worksheet = panCore.workbook_obj.add_worksheet(scmEndpoint.replace('/','_'))
+    panCore.headers = ['source', 'Name', 'Destination', 'Results', 'errMessage']
+    for object in panCore.postThingResults[scmEndpoint]['objectDetails']:
+        for item in panCore.postThingResults[scmEndpoint]['objectDetails'][object].keys():
+            if item not in panCore.headers:
+                panCore.headers.append(item)
+    worksheet.merge_range(0,0,0,len(panCore.headers)-1, f'{scmEndpoint}', panCore.style_label)
+    worksheet.write_row('A2', panCore.headers, panCore.style_rowHeader)
+    panCore.headers.remove('source')
+    row=2
+    for object in panCore.postThingResults[scmEndpoint]['objectDetails']:
+        worksheet.write(row, 0, object)
+        col = 1
+        for item in panCore.headers:
+            if item in panCore.postThingResults[scmEndpoint]['objectDetails'][object].keys():
+                worksheet.write(row, col, str(panCore.postThingResults[scmEndpoint]['objectDetails'][object][item]))
+            else:
+                worksheet.write(row, col, "", panCore.style_blackBox)
+            col +=1
+        row +=1
+panCore.workbook_obj.close()
+
+
+
+panCore.initXLSX(f"{args[0].workbookname.split('.xlsx')[0]}_2.xlsx")
+worksheet = panCore.workbook_obj.add_worksheet('Objects')
+panCore.headers = ['source', 'type', 'Name', 'Destination', 'Results', 'errMessage']
+for scmEndpoint in panCore.postThingResults.keys():
+    for object in panCore.postThingResults[scmEndpoint]['objectDetails']:
+        for item in panCore.postThingResults[scmEndpoint]['objectDetails'][object].keys():
+            if item not in panCore.headers:
+                panCore.headers.append(item)
+worksheet.merge_range(0,0,0,len(panCore.headers)-1, f'{scmEndpoint}', panCore.style_label)
+worksheet.write_row('A2', panCore.headers, panCore.style_rowHeader)
+panCore.headers.remove('source')
+panCore.headers.remove('type')
+row=2
+for scmEndpoint in panCore.postThingResults.keys():
+    for object in panCore.postThingResults[scmEndpoint]['objectDetails']:
+        worksheet.write(row, 0, object)
+        worksheet.write(row, 1, scmEndpoint)
+        col = 2
+        for item in panCore.headers:
+            if item in panCore.postThingResults[scmEndpoint]['objectDetails'][object].keys():
+                worksheet.write(row, col, str(panCore.postThingResults[scmEndpoint]['objectDetails'][object][item]))
+            else:
+                worksheet.write(row, col, "", panCore.style_blackBox)
+            col +=1
+        row +=1
+panCore.workbook_obj.close()
