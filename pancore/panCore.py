@@ -515,7 +515,7 @@ def initXLSX(workBookName="noName.xlsx", constantMemory=False):
     for style in panExcelStyles.styles:
         logger.info(style)
         # setattr(self,style,workbook_obj.add_format(panExcelStyles.styles[style]))
-        exec(style + " = workbook_obj.add_format(panExcelStyles.styles[style])")
+        exec(f"global style_{style}\nstyle_{style} = workbook_obj.add_format(panExcelStyles.styles[style])")
     logger.info('< XLSX output initialized. ')
 
 

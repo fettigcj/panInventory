@@ -10,7 +10,7 @@ device certificate expiration issues when PAN-OS device certs expired at the end
 The script can generate upgrade readiness reports as well as upgrade firewalls. Readiness report will detail 
 serial number, hostname, ha State, upgradeable status, and a 'details' column showing rationale for the 'upgradeable' column as well as starting and ending version columns.  
 
-See Examples below.
+Examples below, [Workflow diagram](https://lucid.app/publicSegments/view/264469e4-0d7f-4d20-8403-c968b8e861f5/image.png)
 
 ### EXTREMELY dangerous. Use with CAUTION.
 
