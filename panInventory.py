@@ -18,6 +18,7 @@ Changelog
 2023-03-30 - Fixed 'NetworkInterfaces-Logical' spreadsheet
 2023-04-01 - Added syslogProfiles & LogOutput summary & details report
 2023-12-01 - Added 'template' and 'template stack' worksheets
+2024-01-11 - Added zone protection profiles worksheet.
 
 Goals
 1.  On "zoneInfo" worksheet the "Zones withouth interfaces" report should use colspan() to spread the list of firewalls
@@ -355,7 +356,42 @@ def gatherZoneList():
                 zoneRecord += 1
                 zoneList[zone_obj.name][zoneRecord] = {"config": zoneAbout,
                                                        "firewalls": [fwName + " (" + device + ")"]}
-    return(panCore.devData)
+    return panCore.devData
+
+
+def gatherZoneProtectionProfiles():
+    zppProfiles = {}
+    xmlData = panCore.xmlToLXML(fw_obj.xapi.get("/config/devices/entry[@name='localhost.localdomain']/network/profiles/zone-protection-profile"))
+    for zpp in xmlData.xpath('/response/result/zone-protection-profile/entry'):
+        profileName = zpp.attrib['name']
+        zppProfiles[profileName] = {}
+        for child in zpp.getchildren():
+            panCore.headers = []
+            panCore.devData = {child.tag: {}}
+            panCore.iterator(child, child.tag)
+            zppProfiles[profileName].update(panCore.devData[child.tag])
+        delKeys = []
+        for key in zppProfiles[profileName].keys():
+            if key.endswith('@ptpl') or key.endswith('@src'):
+                delKeys.append(key)
+        for key in delKeys:
+            del zppProfiles[profileName][key]
+        if profileName not in profileData['zoneProtectionProfiles'].keys():
+            # If ZPP isn't already in ZPP dictionary add it as instance 0 of ZPP name
+            profileData['zoneProtectionProfiles'][profileName] = {0: {'config': zppProfiles[profileName], 'firewalls': [f"{fwName} ({device})"]}}
+        else:
+            # If another FW already had a ZPP w/ this ZPP name check if they're the same ZPP config.
+            # If so append this firewall to the list of firewalls w/ this ZPP.
+            # If not create another instance in the ZPP dict as a new instance of the ZPP's name.
+            matchFound = False
+            for zppInstance in profileData['zoneProtectionProfiles'][profileName]:
+                if zppProfiles[profileName] == profileData['zoneProtectionProfiles'][profileName][zppInstance]["config"]:
+                    matchFound = True
+                    profileData['zoneProtectionProfiles'][profileName][zppInstance]['firewalls'].append(f"{fwName} ({device})")
+            if not matchFound:
+                zppInstance += 1
+                profileData['zoneProtectionProfiles'][profileName][zppInstance] = {'config': zppProfiles[profileName], 'firewalls': [f"{fwName} ({device})"]}
+    return zppProfiles
 
 
 def gatherTemplateData(templates, tStacks):
@@ -432,11 +468,11 @@ panCore.logging.info("Gathering Detailed Inventory from Firewalls:")
 firewallDetails = {}
 fwDetailsByModel = {}
 clusterDetails = {}
-profileData = {'syslog': {}, 'logOutputs': {}}
+profileData = {'syslog': {}, 'logOutputs': {}, 'zoneProtectionProfiles': {}}
 zoneList = {}
 fwCount = len(firewalls)
 fwNum = 1
-for fw_obj in firewalls[0:10]:
+for fw_obj in firewalls:
     try:
         device = fw_obj.serial
         if not fw_obj.state.connected:
@@ -473,6 +509,8 @@ for fw_obj in firewalls[0:10]:
         firewallDetails[device]['schedules'] = gatherFirewallSchedules(device)
         panCore.logging.info("    > Gathering zones attached to this firewall...")
         firewallDetails[device]['zones'] = gatherZoneList() #Function also updates zoneList dictionary.
+        panCore.logging.info("    > Gathering zone protection profiles...")
+        firewallDetails[device]['zoneProtectionProfiles'] = gatherZoneProtectionProfiles()  # Function also updates zoneProtectionProfiles dictionary.
         panCore.logging.info("    > Gathering licensing info...")
         firewallDetails[device]['licensing'] = gatherLicenseInfo()
         #### Check if the firewall is in an HA cluster, and if so gather the info about the cluster
@@ -522,6 +560,7 @@ for zoneName in zoneList.keys():
             zoneReport['zonesWithoutInterfaces'][f"{zoneName}^^{zoneInstance}"] = {"zoneName": zoneName, 'zoneInstance': zoneInstance, 'zoneFirewalls':zoneList[zoneName][zoneInstance]['firewalls']}
 panCore.logging.info("Finished building ZoneReport\n")
 panCore.logging.info("Begining building dictionaries for summary data reports")
+
 syslogProfileCount = {}
 for key, value in profileData['syslog'].items():
     name = value['name']
@@ -533,6 +572,14 @@ for syslogProfile in profileData['syslog']:
     serverName = profileData['syslog'][syslogProfile]['name']
     profileData['syslog'][syslogProfile]['count'] = f"{syslogProfileCount[serverName]['counted']}/{syslogProfileCount[serverName]['total']}"
     syslogProfileCount[serverName]['counted'] += 1
+
+"""
+zppReport = {'zppWithMultipleConfigs': []}
+for zppName in profileData['zoneProtectionProfiles'].keys():
+    if len(profileData['zoneProtectionProfiles'][zppName]) > 1:
+        zppReport['zppWithMultipleConfigs'].append(zppName)
+"""
+
 
 logOutputCount = {}
 for key, value in profileData['logOutputs'].items():
@@ -550,6 +597,7 @@ panCore.logging.info("Done w/ summary data dictionaries.")
 
 ###   DEBUG POINT
 #del panCore.worksheet
+#del worksheet
 #del panCore.workbook_obj
 panCore.initXLSX(args[0].workbookname)
 panCore.headers = []
@@ -863,6 +911,36 @@ for zoneName in zoneList.keys():
             col += 1
         row += 1
 
+
+panCore.logging.info("Writing zone protection profiles worksheet.")
+worksheet = panCore.workbook_obj.add_worksheet("zoneProtectionProfiles")
+headers = []
+for zpp in profileData['zoneProtectionProfiles']:
+    for instance in profileData['zoneProtectionProfiles'][zpp]:
+        for item in profileData['zoneProtectionProfiles'][zpp][instance]['config'].keys():
+            if item not in headers:
+                headers.append(item)
+
+worksheet.write_row("A1", ['ProfileName', 'ConfigNumber', 'FirewallsUsingConfig', ''] + headers, panCore.style_rowHeader)
+row = 1
+for zpp in profileData['zoneProtectionProfiles']:
+    count = len(profileData['zoneProtectionProfiles'][zpp])
+    for instance in profileData['zoneProtectionProfiles'][zpp]:
+        worksheet.write(row, 0, zpp)
+        worksheet.write(row, 1, f"{instance}/{count}")
+        worksheet.write(row, 2, str(profileData['zoneProtectionProfiles'][zpp][instance]['firewalls']))
+        worksheet.write(row, 3, "", panCore.style_blackBox)
+        col = 4
+        for header in headers:
+            if header in profileData['zoneProtectionProfiles'][zpp][instance]['config'].keys():
+                worksheet.write(row, col, profileData['zoneProtectionProfiles'][zpp][instance]['config'][header])
+            else:
+                worksheet.write(row, col, "", panCore.style_blackBox)
+            col +=1
+        row +=1
+
+
+panCore.worksheet = panCore.workbook_obj.add_worksheet("NetworkInterfaces-Logical")
 panCore.headers = ['fwName']
 for device in firewallDetails:
     for interface in firewallDetails[device]['interfaces']['logical']:
@@ -870,8 +948,6 @@ for device in firewallDetails:
             if key not in panCore.headers:
                 panCore.headers.append(key)
 
-
-panCore.worksheet = panCore.workbook_obj.add_worksheet("NetworkInterfaces-Logical")
 panCore.worksheet.write_row("A1", panCore.headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
 row = 1
 msg = '--> Writing logical network interface {0} on row {1}'
