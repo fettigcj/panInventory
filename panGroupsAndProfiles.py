@@ -897,7 +897,7 @@ if __name__ == "__main__":
     # Preamble section ahead of URL filtering report
     #
     worksheet = workbook.add_worksheet('URL Filtering')
-    worksheet.merge_range('A1:H1','THD URL Filtering Profiles',workbook.add_format(panExcelStyles.styles['label']))
+    worksheet.merge_range('A1:H1','URL Filtering Profiles',workbook.add_format(panExcelStyles.styles['label']))
     row = 1
     col = 0
     colLimit = 7

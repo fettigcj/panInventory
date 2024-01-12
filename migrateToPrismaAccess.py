@@ -1114,8 +1114,8 @@ if __name__ == "__main__":
         if postRules:  # Don't try to import an empty list of rules.
             processRulebasePolicies(postRules[0], context='post', destination=destination)  # select the rulebase from the list of rulebases returned
 
-
-panCore.initXLSX(args[0].workbookname)
+"""
+panCore.initXLSX(f"{args[0].workbookname.split('.xlsx')[0]}_2.xlsx")
 for scmEndpoint in panCore.postThingResults.keys():
     worksheet = panCore.workbook_obj.add_worksheet(scmEndpoint.replace('/','_'))
     panCore.headers = ['source', 'Name', 'Destination', 'Results', 'errMessage']
@@ -1138,10 +1138,9 @@ for scmEndpoint in panCore.postThingResults.keys():
             col +=1
         row +=1
 panCore.workbook_obj.close()
+"""
 
-
-
-panCore.initXLSX(f"{args[0].workbookname.split('.xlsx')[0]}_2.xlsx")
+panCore.initXLSX(args[0].workbookname)
 worksheet = panCore.workbook_obj.add_worksheet('Objects')
 panCore.headers = ['source', 'type', 'Name', 'Destination', 'Results', 'errMessage']
 for scmEndpoint in panCore.postThingResults.keys():
