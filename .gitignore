@@ -1,0 +1,12 @@
+*.html
+*.xlsx
+*.json
+*.txt
+*.log*
+.idea/
+__*
+*.pdf
+*.zip
+*.sh
+*.bat
+*.xml

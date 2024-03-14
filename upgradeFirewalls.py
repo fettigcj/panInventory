@@ -6,7 +6,6 @@
 # rqmts:	Panorama IP Address, [username, password]
 #
 # © 2020 Palo Alto Networks, Inc.  All rights reserved.
-# Licensed under SCRIPT SOFTWARE AGREEMENT, Palo Alto Networks, Inc., at https://www.paloaltonetworks.com/legal/script-software-license-1-0.pdf
 #
 ################################################################################
 """
@@ -14,7 +13,8 @@ Changelog
 2023-11-08: Started Project
 2023-11-29: Base functionality finished.
 2024-01-03: Reformat SMTP to utilize arg parser input, reconfigured 'firewalls' input to accept txt file input optionally
-
+2024-01-29: added 5 second wait after HA swap and changed from fw_obj."suspend peer" to peer_obj."suspend Self"
+            logic after seeming false positive in session count mismatch.
 
 """
 
@@ -34,7 +34,8 @@ parser.add_argument('-l', '--headless', help="Operate in headless mode, without 
 parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='upgrade-firewalls.log')
 parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
 parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='upgradeFirewalls.xlsx')
-parser.add_argument('-V', '--targetVersion', help="What version to upgrade to", default="10.1.11")
+parser.add_argument('-m', '--maxUpgrades', help="Maximum upgrades (and thus reboots) to perform on a firewall.", default=5)
+parser.add_argument('-V', '--targetVersion', help="What version to upgrade to", default="10.0.11-h4")
 parser.add_argument( '-A', '--upgradeActive', help="Suspend & upgrade active IF passive already upgraded.", default=False, action='store_true')
 parser.add_argument('-U', '--enableUpgrade', help="Enable upgrading of firewalls. Otherwise report only", default=False, action='store_true')
 parser.add_argument('-S', '--upgradeStandalone', help='Upgrade & Reboot non-HA firewalls. WILL CAUSE OUTAGE DURING REBOOT.', default=False, action='store_true')
@@ -58,10 +59,12 @@ else:
 # If a filename was specified override the 'firewalls' list retrieved from panorama
 # with the explicit serial numbers in the file
 if args[0].filename:
+    panCore.logging.info(f"Filename set to {args[0].filename}. Attempting to retrieve firewall list from text file")
     firewalls = []
-    with open('fwSerials.txt') as file:
+    with open(args[0].filename) as file:
         for line in file:
             firewalls.append(line.rstrip())
+    panCore.logging.info(f"Serial numbers retrieved from list: {firewalls}")
 
 
 
@@ -193,14 +196,15 @@ def checkUpgradabilityActive():
     panCore.logging.info(f"    > {fwName} is active, but script was called with 'upgradeActive == True' and Passive PAN-OS version is greater than its own. Proceeding to suspend Active firewall and ugprade. ")
     preSessions = getSessionCount(fw_obj)
     fw_obj.op('request high-availability state suspend')
-    time.sleep(10)
+    time.sleep(5)
     fw_obj.op('request high-availability state functional')  # This assumes no preemption in HA config that will auto-revert active state...
+    time.sleep(5)
     postSessions = getSessionCount(peer_obj)
     if postSessions not in range(int((preSessions * .7)),int((preSessions * 1.3))):
         panCore.logging.warning(f"    > {peerName} session count ({postSessions}) not within 30 percent of {fwName} pre-suspension count ({preSessions}). REVERTING SUSPENSION.")
-        fw_obj.op('request high-availability state peer suspend')
-        time.sleep(10)
-        fw_obj.op('request high-availability state peer functional')
+        peer_obj.op('request high-availability state suspend')
+        time.sleep(5)
+        peer_obj.op('request high-availability state functional')
         return False, "Session Count Range Error"
     else:
         panCore.logging.info(f"    > {fwName} successfully suspended. Pre-suspension session count ({preSessions}) {peerName} session count ({postSessions}) within 30 percentage points ")
@@ -289,8 +293,8 @@ def takeBackup():
         with open(f"{fwName}_Config.xml", "w") as outFile:
             outFile.write(str(panCore.ET.tostring(config, pretty_print=True, encoding=str)))
     except Exception as exceptionDetails:
-        panCore.logging.error(f" >    Failed to backup firewall.")
-        panCore.logging.error(f" >    Exception details: {exceptionDetails}")
+        panCore.logging.error(f"\t\t> Failed to backup firewall.")
+        panCore.logging.error(f"\t\t> Exception details: {exceptionDetails}")
         return False
     else:
         panCore.logging.info(f" >    Backup of running config taken and stored as {fwName}_Config.xml")
@@ -332,7 +336,6 @@ def getPanoInventory():
         return panCore.devData
 
 
-
 fwCount = len(firewalls)
 targetMajor, targetMinor, targetMaint = args[0].targetVersion.split('.')
 if '-h' in targetMaint:
@@ -371,8 +374,8 @@ for firewall in firewalls:
     panCore.fwLogger.setLevel(panCore.logging.DEBUG)
     panCore.fwLogger.setFormatter(panCore.logging.Formatter('%(message)s'))
     panCore.logger.addHandler(panCore.fwLogger)
-    panCore.logging.info(f">> Examining {fwName} ({fwSerial}) running {startingVersion}. ({fwNum}/{fwCount}) at {fwStartTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
-    panCore.logging.info("    > Trying to gather HA config.")
+    panCore.logging.info(f"\t Examining {fwName} ({fwSerial}) running {startingVersion}. ({fwNum}/{fwCount}) at {fwStartTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
+    panCore.logging.info("\t\t Trying to gather HA config.")
     try:
         haState = fw_obj.show_highavailability_state()
     except Exception as exceptionDetails:
@@ -381,28 +384,41 @@ for firewall in firewalls:
         continue
     sessionCountInRange = upgradeable = True  # set value in outer scope so they can be modified in function
     upgradeable, reason = upgradeChecker()
-    if upgradeable:
+    if not upgradeable:
+        panCore.logging.warning(f"\t> {fwName} Not upgradable because {reason}.")
+        endingVersion = startingVersion
+    else:
+        panCore.logging.info(f"\t>{fwName} marked upgradeable by upgradeChecker(). Checking if upgrades are enabled.")
         if args[0].enableUpgrade:
             backupTaken = takeBackup()
             if backupTaken:
-                preUpgradesessionCount = getSessionCount(fw_obj)
-                panCore.logging.info(f" >    Pre-upgrade session count for {fwName}: {preUpgradesessionCount}")
-                upgradeFirewall()
-                time.sleep(60)
-                postUpgradeSessionCount = getSessionCount(fw_obj)
-                panCore.logging.info(f"Post-upgrade session count for {fwName}: {postUpgradeSessionCount}")
-                if postUpgradeSessionCount in range(int((preUpgradesessionCount *.5)),int((preUpgradesessionCount *1.5))):
-                    panCore.logging.info(f"Post upgrade session count ({postUpgradeSessionCount}) within 50 percentage points of pre-upgrade session count ({preUpgradesessionCount}).")
-                    sessionCountInRange = True
+                upgradeCounter = 1
+                doneUpgrading = False
+                while doneUpgrading == False and upgradeCounter <= args[0].maxUpgrades:
+                    preUpgradesessionCount = getSessionCount(fw_obj)
+                    panCore.logging.info(f"\t> Pre-upgrade ({upgradeCounter}) session count for {fwName}: {preUpgradesessionCount}")
+                    upgradeFirewall()
+                    time.sleep(60)
+                    postUpgradeSessionCount = getSessionCount(fw_obj)
+                    panCore.logging.info(f"\t> Post-upgrade ({upgradeCounter}) session count for {fwName}: {postUpgradeSessionCount}")
+                    if postUpgradeSessionCount in range(int((preUpgradesessionCount *.5)),int((preUpgradesessionCount *1.5))):
+                        panCore.logging.info(f"Post upgrade session count ({postUpgradeSessionCount}) within 50 percentage points of pre-upgrade session count ({preUpgradesessionCount}).")
+                        sessionCountInRange = True
+                    else:
+                        panCore.logging.warning(f"Post upgrade session count ({postUpgradeSessionCount}) outside of expected 50 percentage point range of pre-upgrade session count ({preUpgradesessionCount}). Aborting further upgrades, if any pending.")
+                        sessionCountInRange = False
+                        doneUpgrading = True
+                    upgradeTime = datetime.datetime.now(datetime.timezone.utc)
+                    fw_obj.refresh_system_info()
+                    endingVersion = fw_obj.version.split('.')
+                    panCore.logging.info(f"\t {fwName} ({fwSerial}) upgrade {upgradeCounter} Done. Running {endingVersion} now. Was running {startingVersion} ({fwNum}/{fwCount}) Finished at: {upgradeTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
+                    if endingVersion == args[0].targetVersion.split('.'):
+                        doneUpgrading = True
+                    upgradeCounter += 1
                 else:
-                    panCore.logging.warning(f"Post upgrade session count ({postUpgradeSessionCount}) outside of expected 50 percentage point range of pre-upgrade session count ({preUpgradesessionCount})")
-                    sessionCountInRange = False
-            else:
-                panCore.logging.warning(f"    > Backup failure for {fwName}. Investigate")
-    upgradeTime = datetime.datetime.now(datetime.timezone.utc)
-    fw_obj.refresh_system_info()
-    endingVersion = fw_obj.version.split('.')
-    panCore.logging.info(f"<< {fwName} ({fwSerial}) Done. Running {endingVersion} now. Was running {startingVersion} ({fwNum}/{fwCount}) Finished at: {upgradeTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
+                    panCore.logging.warning(f"\t\t> Backup failure for {fwName}. Investigate")
+
+
     panCore.logger.removeHandler(panCore.fwLogger)
     panCore.fwLogger.close()
     devData[fwSerial] = {
