@@ -18,6 +18,7 @@ Changelog
 2023-12-26 - Incorporate Strata Cloud Manager auth token generation
 2023-12-29 - Update configStart() to standardize keys and changed to programmatic for (_varName in varList exec()) method of building variables.
 2024-01-04 - Eliminated regression bug in configStart where passwords were not being decoded when retrieved from environment variables
+2024-01-29 - Address unboundLocalError where SCMCreds not defined (User picked "N" for connecting to SCM but 'if scm' test encountered bug/error)
 
 Goals
 1.  Re-implement "headless" support. Vestigial elements from prior 'headless mode' exist in this code base but the
@@ -350,7 +351,7 @@ def configStart(headless=False, configStorage='panCoreConfig.json'):
                                 break
                             else:
                                 break
-                    if panCreds:
+                    if 'panCreds' in locals():
                         config['localFile']['panAddress'] = panCreds['panAddress']
                         config['localFile']['panAuthType'] = panCreds['panAuthType']
                         if panCreds['panAuthType'] == 'key':
@@ -359,7 +360,7 @@ def configStart(headless=False, configStorage='panCoreConfig.json'):
                             config['localFile']['panUser'] = panCreds['panUser']
                             config['localFile']['panPass'] = (encodePass(bytes(panCreds['panPass'], 'ascii'))).decode(
                                 'ascii')
-                    if scmCreds:
+                    if 'scmCreds' in locals():
                         config['localFile']['scmUser'] = scmCreds['scmUser']
                         config['localFile']['scmPass'] = (encodePass(bytes(scmCreds['scmPass'], 'ascii'))).decode(
                             'ascii')

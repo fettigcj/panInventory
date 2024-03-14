@@ -21,12 +21,22 @@ Changelog
 2024-01-11 - Added zone protection profiles worksheet.
 
 Goals
-1.  On "zoneInfo" worksheet the "Zones withouth interfaces" report should use colspan() to spread the list of firewalls
-    with these zones out to avoid auto-width from messing with the other tables' views.
-2.  'HALinkGroups' worksheet is showing stand-alone firewalls as though they were a single-node cluster. This is not desired.
-3. Test 'gatherSyslogProfiles' function on multi-vsys firewall, validate /config/shared is sole path. Incorporate "for vsys" loop if necessary.
-4. Implement additional arg to skip syslog / log output details not required.
-5. Cope with timeouts, add error handling to "for fw_obj in firewalls" loop to allow for passing over errors rather than crashing
+    On "zoneInfo" worksheet the "Zones withouth interfaces" report should use colspan() to spread the
+    list of firewalls with these zones out to avoid auto-width from messing with the other tables' views.
+
+    'HALinkGroups' worksheet is showing stand-alone firewalls as though they were a
+    single-node cluster. This is not desired.
+
+    Test 'gatherSyslogProfiles' function on multi-vsys firewall, validate /config/shared is
+    sole path. Incorporate "for vsys" loop if necessary.
+
+    Implement additional arg to skip syslog/logForwarding/ZPP outputs if not required.
+
+    Cope with timeouts, add additional error handling in "for fw_obj in firewalls" loop to
+    allow for passing over errors rather than crashing.
+
+    Update zoneList{}, syslog, logforwarding report methodologies to match ZPP data method to
+    simplify code readability. /possibly/ create framework function to process arbitrary profiles...
 """
 
 
@@ -47,7 +57,7 @@ parser = argparse.ArgumentParser(
 
 """
 In order to have a default behavior of reports being "ENABLED" we default=True below, but then use "store_false" when 
- a flag is activated. This is strange "enabling a negative" is counter-intuitive, but the reversed behavior upon 
+ a flag is activated. This strange "enabling a negative" is counter-intuitive, but the reversed behavior upon 
  ENABLING the flag to DISABLE the report simplifies the user interactions and allows the default to be overruled 
  when the flag is used.
 """
@@ -103,7 +113,10 @@ def gatherHighAvailabilityLinkMonitoringDetails():
     for intGroup in xmlData.xpath('//groups/entry'):
         grpName = intGroup.xpath("./name")[0].text
         grpEnabled = intGroup.xpath("./enabled")[0].text
-        grpFailCond = intGroup.xpath("./fail-cond")[0].text
+        if (intGroup.xpath("./fail-cond")):
+            grpFailCond = intGroup.xpath("./fail-cond")[0].text
+        elif (intGroup.xpath("./failure-condition")):
+            grpFailCond = intGroup.xpath("./failure-condition")[0].text
         panCore.devData['groups'][grpName] = {
             "groupEnabled": grpEnabled,
             "groupFailCond": grpFailCond,
@@ -118,7 +131,6 @@ def gatherHighAvailabilityLinkMonitoringDetails():
             else:
                 panCore.devData['groups'][grpName]['groupMemberDown'] = "Yes"
     return(panCore.devData)
-
 
 def checkLinkMonitoring():
     if clusterDetails[clusterGUID][device]['haConfig']['link-monitoring'] == clusterDetails[clusterGUID][peerDevice]['haConfig']['link-monitoring']:
@@ -378,7 +390,7 @@ def gatherZoneProtectionProfiles():
             del zppProfiles[profileName][key]
         if profileName not in profileData['zoneProtectionProfiles'].keys():
             # If ZPP isn't already in ZPP dictionary add it as instance 0 of ZPP name
-            profileData['zoneProtectionProfiles'][profileName] = {0: {'config': zppProfiles[profileName], 'firewalls': [f"{fwName} ({device})"]}}
+            profileData['zoneProtectionProfiles'][profileName] = {1: {'config': zppProfiles[profileName], 'firewalls': [f"{fwName} ({device})"]}}
         else:
             # If another FW already had a ZPP w/ this ZPP name check if they're the same ZPP config.
             # If so append this firewall to the list of firewalls w/ this ZPP.
@@ -429,7 +441,6 @@ def gatherTemplateData(templates, tStacks):
     return devData
 
 panCore.startLogging(args[0].logfile)
-
 panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
 if hasattr(panCore, 'panUser'):
     pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
