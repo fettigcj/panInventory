@@ -215,8 +215,8 @@ def configStart(headless=False, configStorage='panCoreConfig.json'):
                 "MessageToUser": "THESE ARE NOT TO STORE LOGON INFO. THESE ARE TO STORE WHERE TO GET THAT LOGON INFO",
                 "panAddress": "panAddress",  # Find the Panorama address in the 'panAddress' environment variable
                 "panKey": "panKey",  # find the Panorama API key in the 'panKey' environment variable
-                "username": "panUser",
-                "password": "panPass",
+                "panUser": "panUser",
+                "panPass": "panPass",
                 "panAuthType": "panAuthType",  # whether to use Username/Password or API key to authenticate w/ Panorama
                 "scmUser": "scmUser",
                 "scmPass": "scmPass",
