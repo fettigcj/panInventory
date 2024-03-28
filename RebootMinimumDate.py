@@ -7,30 +7,6 @@ from panos_upgrade_assurance.firewall_proxy import FirewallProxy
 import sys, datetime, xlsxwriter, argparse, re, time, panos, requests, json, copy, zoneinfo, inspect
 
 
-def gatherHighAvailabilityAll():
-    xmlData = panCore.xmlToLXML(fw_obj.op('show high-availability all'))
-    panCore.devData = {
-        'enabled': xmlData.xpath("./result/enabled")[0].text,
-        'mode': xmlData.xpath("./result/group/mode")[0].text,
-        'running-sync': xmlData.xpath("./result/group/running-sync")[0].text,
-        'running-sync-enabled': xmlData.xpath("./result/group/running-sync-enabled")[0].text,
-        'local-info': {},
-        'peer-info': {},
-        'link-monitoring': {},
-        'path-monitoring': {}
-        }
-    panCore.headers = []
-    for setting in xmlData.xpath("./result/group/local-info")[0].getchildren():
-        panCore.iterator(setting,'local-info')
-    for setting in xmlData.xpath("./result/group/peer-info")[0].getchildren():
-        panCore.iterator(setting,'peer-info')
-    for setting in xmlData.xpath("./result/group/link-monitoring")[0].getchildren():
-        panCore.iterator(setting,'link-monitoring')
-    for setting in xmlData.xpath("./result/group/path-monitoring")[0].getchildren():
-        panCore.iterator(setting,'path-monitoring')
-    return(panCore.devData)
-
-
 def getSessionCount(fw_obj):
     try:
         devData = panCore.xmlToLXML(fw_obj.op('show session info'))
@@ -56,7 +32,7 @@ parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be g
 parser.add_argument('-t', '--timezone', help="Desired timezone in output file", default="US/Eastern")
 parser.add_argument('-T', '--Thread_limit', help="Limit number of threads to prevent overwhelming API destination", default=100)
 parser.add_argument('-W', '--Wait', help="Seconds to wait before starting next batch of threads in multi-threaded operations.", default=2)
-parser.add_argument('-d', '--disabledryrun', help="Default mode is log only. Disable 'Dry Run' to take action", default=True, action='store_true')
+parser.add_argument('-d', '--disabledryrun', help="Default mode is log only. Disable 'Dry Run' to take action", default=False, action='store_true')
 parser.add_argument('-S', '--rebootStandalone', help="Default mode will not reboot Stand alone firewalls. Enable this flag to reboot them.", default=False, action='store_true')
 parser.add_argument('-D', '--targetDate', help="Target reboot date. Reboot anything that hasn't been rebooted since this date.", default='3/1/2024')
 args = parser.parse_known_args()
