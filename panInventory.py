@@ -19,6 +19,7 @@ Changelog
 2023-04-01 - Added syslogProfiles & LogOutput summary & details report
 2023-12-01 - Added 'template' and 'template stack' worksheets
 2024-01-11 - Added zone protection profiles worksheet.
+2024-04-03 - Adding pending local config changes section
 
 Goals
     On "zoneInfo" worksheet the "Zones withouth interfaces" report should use colspan() to spread the
@@ -74,6 +75,13 @@ parser.add_argument('-z', '--zones', help="Disable zone details reporting.", def
 args = parser.parse_known_args()
 
 todayDate = datetime.date.today()
+
+
+def gatherPendingLocalChanges():
+    xmlData = panCore.xmlToLXML(fw_obj.op('show config list changes'))
+    if not len(xmlData[0]):
+        return False
+
 
 def gatherHighAvailabilityAll(device):
     #global panCore.devData, panCore.headers
@@ -524,6 +532,9 @@ for fw_obj in firewalls:
         firewallDetails[device]['zoneProtectionProfiles'] = gatherZoneProtectionProfiles()  # Function also updates zoneProtectionProfiles dictionary.
         panCore.logging.info("    > Gathering licensing info...")
         firewallDetails[device]['licensing'] = gatherLicenseInfo()
+        panCore.logging.info("    > Checking for pending local changes ...")
+        if fw_obj.pending_changes():
+            firewallDetails[device]['pendingChanges'] = gatherPendingLocalChanges()
         #### Check if the firewall is in an HA cluster, and if so gather the info about the cluster
         #if fw_obj.op(cmd="show high-availability state").findall(".//enabled")[0].text != 'yes':
         if 'ha.peer.serial' not in panoInventory[device]:
