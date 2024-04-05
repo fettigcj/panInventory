@@ -37,9 +37,9 @@ args = parser.parse_known_args()
 panCore.startLogging(args[0].logfile)
 panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
 if hasattr(panCore, 'panUser'):
-    pano_obj, deviceGroups, firewalls = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
+    pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
 elif hasattr(panCore, 'panKey'):
-    pano_obj, deviceGroups, firewalls = panCore.buildPano_obj(panAddress=panCore.panAddress, panKey=panCore.panKey)
+    pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panKey=panCore.panKey)
 else:
     panCore.logging.critical("Found neither username/password nor API key. Exiting.")
     sys.exit()
