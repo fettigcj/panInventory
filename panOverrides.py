@@ -15,9 +15,10 @@ Changelog
     2023-02-02 - Creation Date
     2023-02-07 - Finished audit + Export-to-execl functionality. Separating 'pseudo' passive from 'passive' may hinder analysis. will probably merge in later revision.
     2023-02-09 - Aesthetic cleanup, standardized 'no username or key found' section and corrected var1[:-5] to var1[:-3] typo in passive override report section.
+    2024-04-04 - Added Panorama templateStack analysis to show where config is set and allow spotting templates which override one another.
 """
 
-import panCore, panExcelStyles
+from pancore import panCore, panExcelStyles
 import datetime, sys, argparse
 
 parser = argparse.ArgumentParser(
@@ -36,9 +37,9 @@ panCore.initXLSX(args[0].workbookname)
 panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
 
 if hasattr(panCore, 'panUser'):
-    pano_obj, deviceGroups, firewalls = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
+    pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
 elif hasattr(panCore, 'panKey'):
-    pano_obj, deviceGroups, firewalls = panCore.buildPano_obj(panAddress=panCore.panAddress, panKey=panCore.panKey)
+    pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panKey=panCore.panKey)
 else:
     panCore.logging.critical("Found neither username/password nor API key. Exiting.")
     sys.exit()
