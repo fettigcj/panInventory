@@ -33,7 +33,6 @@ parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be g
 args = parser.parse_known_args()
 
 panCore.startLogging(args[0].logfile)
-panCore.initXLSX(args[0].workbookname)
 panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
 
 if hasattr(panCore, 'panUser'):
@@ -214,6 +213,7 @@ def writeFirewallData(overrides):
 
 #Prep report gathering state & logging info
 startTime = datetime.datetime.now(datetime.timezone.utc)
+panCore.initXLSX(args[0].workbookname)
 panCore.logging.info(f"Starting audit at {startTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
 fwCount = len(firewalls)
 fwNum = 0

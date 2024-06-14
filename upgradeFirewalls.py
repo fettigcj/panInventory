@@ -35,7 +35,7 @@ parser.add_argument('-L', '--logfile', help="Log file to store log output to.", 
 parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
 parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='upgradeFirewalls.xlsx')
 parser.add_argument('-m', '--maxUpgrades', help="Maximum upgrades (and thus reboots) to perform on a firewall.", default=5)
-parser.add_argument('-V', '--targetVersion', help="What version to upgrade to", default="10.0.11-h4")
+parser.add_argument('-V', '--targetVersion', help="What version to upgrade to", default="10.2.9-h1")
 parser.add_argument( '-A', '--upgradeActive', help="Suspend & upgrade active IF passive already upgraded.", default=False, action='store_true')
 parser.add_argument('-U', '--enableUpgrade', help="Enable upgrading of firewalls. Otherwise report only", default=False, action='store_true')
 parser.add_argument('-S', '--upgradeStandalone', help='Upgrade & Reboot non-HA firewalls. WILL CAUSE OUTAGE DURING REBOOT.', default=False, action='store_true')
@@ -417,8 +417,9 @@ for firewall in firewalls:
                     upgradeCounter += 1
                 else:
                     panCore.logging.warning(f"\t\t> Backup failure for {fwName}. Investigate")
-
-
+        else:
+            panCore.logging.info("Enable upgrade not set.")
+            endingVersion = startingVersion
     panCore.logger.removeHandler(panCore.fwLogger)
     panCore.fwLogger.close()
     devData[fwSerial] = {
@@ -428,6 +429,7 @@ for firewall in firewalls:
         'upgradeable': upgradeable,
         'details': reason,
         'startingVersion': startingVersion,
+        #**({'endingVersion': endingVersion} if 'endingVersion' in locals() else {}),
         'endingVersion': endingVersion
     }
     if args[0].mailEnable:
