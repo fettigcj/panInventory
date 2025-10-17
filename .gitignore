@@ -5,9 +5,11 @@
 *.log*
 .idea/
 __*
+.venv
 *.pdf
 *.zip
 *.sh
 *.bat
 *.xml
 *.tgz
+*.csv

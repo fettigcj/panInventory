@@ -11,22 +11,33 @@ styles = {
         'bold': 1,
         'align': 'center',
         'bottom': 2},
+    'centeredText': {
+        'bold': 0,
+        'align': 'left',
+        'valign': 'vcenter'},
     'normalText': {
         'bold': 0,
         'align': 'left',
-        'valign': 'center',
+        'valign': 'vcenter',
         'border': 1,
         'bg_color': '#FFFFFF'},
+    'greyBackground': {
+        'bold': 0,
+        'align': 'left',
+        'valign': 'vcenter',
+        'border': 1,
+        'bg_color': '#D3D3D3'},
     'wrappedText': {
         'bold': 0,
         'align': 'left',
-        'valign': 'center',
+        'valign': 'vcenter',
         'border': 1,
         'text_wrap': True,
         'bg_color': '#FFFFFF'},
     'warnText': {
         'bold': 1,
         'align': 'left',
+        'text_wrap': True,
         'border': 1,
         'bg_color':	'#A6A6A6',
         'font_color': '#FF0000'},
@@ -39,7 +50,7 @@ styles = {
     'blackBox': {
         'bg_color': '#000000'},
     'vAlignCenter': {
-        'valign': 'center'}
+        'valign': 'vcenter'}
     }
 
 """

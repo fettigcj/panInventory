@@ -42,14 +42,10 @@ import logging, logging.handlers
 # Handler to encode passwords. NOT ENCRYPTION. ONLY OBFUSCATION.
 import zlib
 from base64 import urlsafe_b64encode as b64e, urlsafe_b64decode as b64d
-
-logFileName = 'PanCore.log'
-# Default log file name. Keeping this to support earlier scripts that don't define their
-# own log file name when calling panCore
+logger = logging.getLogger(__name__)
 
 def encodePass(data: bytes) -> bytes:
     return b64e(zlib.compress(data, 9))
-
 
 def decodePass(obscured: bytes) -> bytes:
     return zlib.decompress(b64d(obscured))
@@ -173,13 +169,12 @@ def dbCredPrompt():
 
 def configStart(headless=False, configStorage='panCoreConfig.json'):
     """
-    Get credentials for Panorama and/or Strata Cloud Manager. Default config storage is JSON file.
-    Alternatively a database or environment variables may be used, though this introduces additional dependencies.
+    Get credentials for Panorama and/or Strata Cloud Manager. Default config storage is a JSON file.
+    Alternatively, a database or environment variables may be used, though this introduces additional dependencies.
     """
-    if 'logger' not in globals():
-        startLogging(logFileName)
-        logger.warning('Calling script ran panCore.configStart() before panCore.startLogging. Initiating logging with '
-                       'default log file name.')
+    if not bool(logging.getLogger()):
+        startLogging('loggingNotStarted.log')
+        logger.warning('Calling script ran panCore.configStart() before panCore.startLogging. Initiating logging with default log file name.')
     if os.path.exists(configStorage):
         logger.info("Getting config/credentials from file.")
         try:
@@ -430,104 +425,86 @@ def configStart(headless=False, configStorage='panCoreConfig.json'):
         #                    f"If you've just built the setVariables.bat file go run it to create the necessary environment variables\n"
         #                    f"and then re-run this script. (Re-launch your IDE if necessary as IDE environment is generated at runtime.).")
 
-def startLogging(logFileName):
-    global logger
-    logger = logging.getLogger('')
-    logger.setLevel(logging.DEBUG)
-    # logging.getLogger('').setLevel(logging.DEBUG)
-    logFormat = logging.Formatter('%(message)s')
-    fileLogger = logging.handlers.TimedRotatingFileHandler(f"{logFileName}", when='midnight', backupCount=5, encoding='utf-8')
-    fileLogger.setLevel(logging.DEBUG)
-    fileLogger.setFormatter(logFormat)
-    screenLogger = logging.StreamHandler()
-    screenLogger.setLevel(logging.INFO)
-    screenLogger.setFormatter(logFormat)
-    # logging.getLogger('').addHandler(fileLogger)
-    # logging.getLogger('').addHandler(screenLogger)
-    logger.addHandler(fileLogger)
-    logger.addHandler(screenLogger)
-"""
-MAILHOST = 'smtp.testServer.com'
-FROM = 'panCoreScript@scriptOutput.local'
-TO = ['reportOutput@testServer.com']
-SUBJECT = 'PanCore Log Output'
-class smtpLogger(logging.handlers.BufferingHandler):
-    def __init__(self, mailhost, fromaddr, toaddrs, subject, capacity):
-        logging.handlers.BufferingHandler.__init__(self, capacity)
-        self.mailhost = mailhost
-        self.mailport = None
-        self.fromaddr = fromaddr
-        self.toaddrs = toaddrs
-        self.subject = subject
-        self.setFormatter(logging.Formatter("%(asctime)s %(levelname)-5s %(message)s"))
 
-    def build_email(self):
-        if len(self.buffer) > 0:
-            try:
-                import smtplib
-                port = self.mailport
-                if not port:
-                    port = smtplib.SMTP_PORT
-                smtp = smtplib.SMTP(self.mailhost, port)
-                msg = f"From: {self.fromaddr}\r\nTo: {','.join(self.toaddrs)}\r\nSubject: {self.subject}\r\n\r\n"
-                for record in self.buffer:
-                    s = self.format(record)
-                    print(s)
-                    msg = msg + s + "\r\n"
-                smtp.sendmail(self.fromaddr, self.toaddrs, msg)
-                smtp.quit()
-            except Exception as exceptionDetails:
-                self.handleError(None)  # no particular record
-                logging.error(f"Exception Encountered: {exceptionDetails}")
-            self.buffer = []
+def startLogging(logFileName: str) -> logging.Logger:
+    """
+    Initialize the root logger and create the main log file handler.
 
-def test():
+    Args:
+        logFileName: Path to the log file
+
+    Returns:
+        logging.Logger: Root logger instance
+    """
+    # Configure the root logger
     logger = logging.getLogger("")
     logger.setLevel(logging.DEBUG)
-    logger.addHandler(BufferingSMTPHandler(MAILHOST, FROM, TO, SUBJECT, 10))
-    for i in range(102):
-        logger.info("Info index = %d", i)
-    logging.shutdown()
+    logger.handlers.clear()
+    # Create and configure handlers
+    fileFormat = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    consoleFormat = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    fileHandler = logging.handlers.TimedRotatingFileHandler(filename=f"{logFileName}", when='midnight', backupCount=5, encoding='utf-8')
+    fileHandler.setLevel(logging.DEBUG)
+    fileHandler.setFormatter(fileFormat)
+    screenLogger = logging.StreamHandler()
+    screenLogger.setLevel(logging.INFO)
+    screenLogger.setFormatter(consoleFormat)
+    # Add handlers to root logger
+    logger.addHandler(fileHandler)
+    logger.addHandler(screenLogger)
+    return logger
 
-if __name__ == "__main__":
-    test()
-"""
+def listLoggers() -> None:
+    """
+    Get all currently instantiated loggers and their levels.
 
-# logging.basicConfig(filename='PanSanityCheck.log', level=logging.DEBUG)
-# console = logging.StreamHandler()
-# console.setLevel(logging.INFO)
-
-def initXLSX(workBookName="noName.xlsx", constantMemory=False):
-    # Initialize "panCore.variable" elements when called by a parent module.
-    # Default 'constantMemory' to false as some calling functions may require multi-line writing into the XLSX file.
-    # Allow caller to turn 'constant memory' flag on if advantageous to that caller's work base
-    # xlsx_writer will normally hold all contents in memory. This flag flushes lines from memory when moving to the next row.
-    global devData, headers, workbook_obj
-    if 'devData' not in globals():
-        devData = {}  # Scratchpad to pass data from other functions and return back to panCore or panCore's parent scope
-    if 'headers' not in globals():
-        headers = []  # Likely unused but retained as vestigial element of iterator function
-    if 'logger' not in globals():
-        startLogging(logFileName)
-        logger.warning('Calling script ran panCore.initXLSX() before panCore.startLogging. Initiating logging with '
-                       'default log file name.')
-    workbook_obj = xlsxwriter.Workbook(workBookName, {'constant_memory': constantMemory})
-    logger.info('>Initializing XLSX output\r> Available styles: ')
-    for style in panExcelStyles.styles:
-        logger.info(style)
-        # setattr(self,style,workbook_obj.add_format(panExcelStyles.styles[style]))
-        exec(f"global style_{style}\nstyle_{style} = workbook_obj.add_format(panExcelStyles.styles[style])")
-    logger.info('< XLSX output initialized. ')
+    Returns:
+        dict: Dictionary of logger names and their effective levels
+    """
+    loggers = {}
+    # Get the manager that holds all logger instances
+    manager = logging.Logger.manager
+    # Iterate through all loggers
+    for logger_name in manager.loggerDict:
+        logger = logging.getLogger(logger_name)
+        loggers[logger_name] = {
+            'level': logging.getLevelName(logger.getEffectiveLevel()),
+            'handlers': [type(h).__name__ for h in logger.handlers],
+            'propagate': logger.propagate
+        }
+    print("\nCurrent Loggers:")
+    print("-" * 80)
+    print(f"{'Logger Name':<30} {'Level':<10} {'Handlers':<20} {'Propagate'}")
+    print("-" * 80)
+    for name, info in loggers.items():
+        handlers = ','.join(info['handlers']) if info['handlers'] else 'None'
+        print(f"{name:<30} {info['level']:<10} {handlers:<20} {info['propagate']}")
 
 
 def stringifyLXML(lxmlBlock):
     return ET.tostring(lxmlBlock)
 
+def exportLXML(lxml, filename):
+    output = ET.ElementTree(lxml)
+    output.write(filename, pretty_print=True, encoding='utf-8', xml_declaration=True)
 
 def xmlToLXML(xmldata):
     # pan-os-python utilizes 'xml.etree.ElementTree' which lacks the ability to access XML xpath nodes
     # and other search/find features found in lxml imported above. This function converts to the lxml object role
     return ET.fromstring(ET2.tostring(xmldata))
+
+
+def expandPanObject(panObject):
+    for childType in panObject.CHILDTYPES:
+        try:
+            logger.info(f"attempting to refresh {childType} on {panObject}")
+            parent, child = childType.split('.')
+            parentModule = getattr(panos, parent)
+            childModule = getattr(parentModule, child)
+            childModule.refreshall(panObject)
+        except Exception as e:
+            logger.warning(f"failed to refresh {childType}: {e}")
+
 
 
 def pingit(host):
@@ -609,18 +586,16 @@ def iterator(element, item, label="", deleteEntryTag=True, ignoreTemplateKeys=Fa
 
 
 def buildPano_obj(panAddress, panUser='optional', panPass='optional', panKey='optional'):
-    if 'logger' not in globals():
-        startLogging(logFileName)
-        logger.warning(
-            'Calling script ran panCore.buildPano_obj() before panCore.startLogging(). '
-            'Initiating logging with default log file name.')
+    if not bool(logging.getLogger()):
+        startLogging('loggingNotStarted.log')
+        logger.warning('Calling script ran panCore.buildPano_obj() before panCore.startLogging. Initiating logging with default log file name.')
     #######################################################################################
     ################## Fetch Firewall Inventory from Panorama #############################
     #######################################################################################
     if not pingit(panAddress):
-        logger.error('\n****\nUnable to Ping Panorama, Aborting further processes\n****\n')
+        logger.error('\t******** Unable to Ping Panorama, Aborting further processes')
         return ("error")
-    logger.info('\n****\nSuccessfully pinged Panorama. Creating PAN-OS-Python objects.')
+    logger.info('\t******** Successfully pinged Panorama. Creating PAN-OS-Python objects.')
     # Theoretically there's no scenario where we would have both an API key and a username, but if both are present
     # prefer API key over username by attempting that first.
     if panKey != 'optional':
@@ -641,8 +616,9 @@ def buildPano_obj(panAddress, panUser='optional', panPass='optional', panKey='op
 
 
 def buildFirewall_obj(panAddress, panUser='optional', panPass='optional', panKey='optional'):
-    if 'logger' not in globals():
-        startLogging(logFileName)
+    if not bool(logging.getLogger()):
+        startLogging('loggingNotStarted.log')
+        logger.warning('Calling script ran panCore.buildFirewall_obj() before panCore.startLogging. Initiating logging with default log file name.')
     #######################################################################################
     ############## Build an individual firewall object ####################################
     ## Useful for commands which cannot be relayed through Panorama (SCP/TFTP exports) ####

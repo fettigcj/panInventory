@@ -36,7 +36,7 @@ parser.add_argument('-c', '--conffile', help="Specify the config file to read op
 parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='upgradeFirewalls.xlsx')
 parser.add_argument('-m', '--maxUpgrades', help="Maximum upgrades (and thus reboots) to perform on a firewall.", default=5)
 parser.add_argument('-V', '--targetVersion', help="What version to upgrade to", default="10.2.9-h1")
-parser.add_argument( '-A', '--upgradeActive', help="Suspend & upgrade active IF passive already upgraded.", default=False, action='store_true')
+parser.add_argument('-A', '--upgradeActive', help="Suspend & upgrade active IF passive already upgraded.", default=False, action='store_true')
 parser.add_argument('-U', '--enableUpgrade', help="Enable upgrading of firewalls. Otherwise report only", default=False, action='store_true')
 parser.add_argument('-S', '--upgradeStandalone', help='Upgrade & Reboot non-HA firewalls. WILL CAUSE OUTAGE DURING REBOOT.', default=False, action='store_true')
 parser.add_argument('-E', '--mailEnable', help='Enable SMTP e-mail reporting.', default=False, action='store_true')
@@ -135,9 +135,9 @@ def checkUpgradabilityPassive():
     if not sessionsSynchronized:
         panCore.logging.warning(f"{fwName} session table NOT synchronized with its HA peer.")
         return False, "SessionNotSynced"
-    if fw_obj.pending_changes():
-        panCore.logging.warning(f"    There are pending changes in the local configuration of {fwName}. Please investigate.")
-        return False, "Pending Config Changes"
+    #if fw_obj.pending_changes():
+    #    panCore.logging.warning(f"    There are pending changes in the local configuration of {fwName}. Please investigate.")
+    #    return False, "Pending Config Changes"
     return True, "ReadyToUpgrade"
 
 def checkUpgradabilityStandalone():
