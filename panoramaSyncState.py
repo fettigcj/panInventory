@@ -107,6 +107,7 @@ for template in xmlData.findall('.//templates/entry'):
 panCore.logging.info(f"Gathering template config info for template stacks w/ devices assigned at {datetime.datetime.now(datetime.timezone.utc).strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
 templateStacks = {}
 for templateStack in templateStackList:
+    panCore.logging.info(f"\t> Gathering template stack config info for {templateStack}")
     templateConfig, templateDescription, templateDevices, templateSettings, templateMembers, templateUserIdentificationMasterDevice, templateVariables = [""] * 7
     templateConfigLineCount = 0
     xmlData = panCore.xmlToLXML(pano_obj.xapi.get(f"/config/devices/entry[@name='localhost.localdomain']/template-stack/entry[@name='{templateStack}']"))
@@ -122,12 +123,13 @@ for templateStack in templateStackList:
         if tplCounter < len(xmlData.xpath('./result/entry/variable/entry')):
             templateVariables += "\r\n"
         tplCounter += 1
-    tplCounter = 1
-    for templateSetting in xmlData.xpath('./result/entry/settings')[0].getchildren():
-        templateSettings += f"{tplCounter}) {templateSetting.tag} == {templateSetting.text}"
-        if tplCounter < len(xmlData.xpath('./result/entry/settings')[0].getchildren()):
-            templateSettings += "\r\n"
-        tplCounter += 1
+    if len(xmlData.xpath('./result/entry/settings')) > 0:
+        tplCounter = 1
+        for templateSetting in xmlData.xpath('./result/entry/settings')[0].getchildren():
+            templateSettings += f"{tplCounter}) {templateSetting.tag} == {templateSetting.text}"
+            if tplCounter < len(xmlData.xpath('./result/entry/settings')[0].getchildren()):
+                templateSettings += "\r\n"
+            tplCounter += 1
     tplCounter = 1
     for device in xmlData.xpath('./result/entry/devices/entry'):
         templateDevices += device.get('name')

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 ################################################################################
-# script:	PanInventory.py
+# script:	migrateToStrataCloudManager.py
 # by:		Christopher Fettig, Palo Alto Networks
 # rqmts:	Panorama IP Address, [username, password]
 #
@@ -957,6 +957,8 @@ if __name__ == "__main__":
     # to write to "Prisma Access" config scope use "Shared"
     parser.add_argument('-d', '--deviceGroups', help='CSV of device group:folder pairings', default="GlobalProtect_Azure:Shared,GP_Americas:Shared")
     parser.add_argument('-z', '--zoneMap', help='Replace zone names for SCM compatibility', default='TRUST:trust,Trust:trust,INTERNET:untrust,GLOBALPROTECT:trust')
+    parser.add_argument('-lo', '--location', help='Specify the location for Prisma Access configuration', default='')
+    parser.add_argument('-lt', '--locationType', help='Specify the location type for Prisma Access configuration', default='')
     args = parser.parse_known_args()
 
     panCore.startLogging(args[0].logfile)

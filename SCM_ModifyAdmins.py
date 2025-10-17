@@ -203,7 +203,6 @@ for aclIdent in accessLists['items']:
 
 print(accessLists['items'][0].keys())
 for aclIdent in accessLists['items']:
-    if 'fettiglab.com' in aclIdent['principal']:
         print(aclIdent.values())
 
 
