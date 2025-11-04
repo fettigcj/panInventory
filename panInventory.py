@@ -46,7 +46,7 @@ Goals
     Examples have been where plugins or telemetry configs have changed, which appears sufficient to trigger a "pending_changes" flag even though no "journaled"
     changes are reported by the "show config list changes" command.
 """
-from typing import Any
+from typing import Any, Optional
 from pancore import panCore
 import argparse, logging
 import sys, datetime, panos
@@ -72,7 +72,7 @@ logger = panCore.startLogging(args[0].logfile)
 # Import child modules only after logging is instantiated, so the log output is captured to the parent logger.
 from pancore import panWorkbookFunctions, panGatherFunctions
 
-def tryAudit(audit_name: str, func_or_name: object, *args: object, **kwargs: object) -> Any | None:
+def tryAudit(audit_name: str, func_or_name: object, *args: object, **kwargs: object) -> Optional[Any]:
     """
     Execute an audit function safely.
     - audit_name: Friendly name for logging (usually the function name).
