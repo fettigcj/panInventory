@@ -6,9 +6,8 @@ from panos.firewall import Firewall
 from panos.network import Zone
 from panos.device import SystemSettings, SyslogServer, SyslogServerProfile
 from typing import Dict, List, Tuple, Union, Any
-import lxml
-import logging
-import copy
+import lxml, logging, copy, re
+from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
@@ -202,6 +201,153 @@ def firewall_DeviceLogSettings(fw_obj: panos.firewall.Firewall) ->  Dict:
                         deviceLogConfig[logType][ruleName]['destinations'][child.tag] = destList
     return deviceLogConfig
 
+
+def firewall_LogCollectorStatus(fw_obj: panos.firewall.Firewall) -> Dict:
+    """
+    Execute `show logging-status verbose yes` and return parsed-only data.
+      {
+        'fw_serial': <serial or None>,
+        'details': {
+           <entry_name>: {
+              'kv':   { <iterator key>: <trimmed value | datetime> },
+              'logs': { <log-tag>: {type,last_created,last_forwarded,last_seq_forwarded,last_seq_acked,total_forwarded}
+                                | {type,'not_available': True}
+                                | {type,'error':'unparsed'} }
+           },
+           ...
+        },
+        'summary': { <key>: <trimmed value | datetime> }
+      }
+    - Verbose:yes required to cause PAN-OS to minimally structure the output rather than barf unstructured strings of information that would only be human-readable if printed to string in monospaced font.
+        even with verbose flag information about each log type is unstructured and must be parsed into key:value pairs for data reporting purposes
+    - Single inline token loop per value converts any YYYY/MM/DD + HH:MM:SS pairs to datetime objects.
+    - Classification (kv vs logs) happens after datetimes are removed from the residual text.
+    """
+
+    logger.info("\t> Gathering log collector status")
+
+    xmlData = panCore.xmlToLXML(fw_obj.op(
+            cmd="<show><logging-status><verbose>yes</verbose></logging-status></show>",
+            cmd_xml=False,
+        )
+    )
+
+    result: Dict = {
+        'fw_serial': getattr(fw_obj, 'serial', None),
+        'details': {},
+        'summary': {},
+    }
+
+    # Simple patterns used inline
+    regexPattern_Date = re.compile(r"^\d{4}/\d{2}/\d{2}$")
+    regexPattern_Time = re.compile(r"^\d{2}:\d{2}:\d{2}$")
+    regexPattern_KeyValueSplit = re.compile(r"^\s*[^:]{1,80}\s*:\s*")  # label ":" with optional spaces around it, anchored at start
+    expectedLogTypes = {
+        'traffic', 'threat', 'hipmatch', 'gtp', 'auth', 'iptag',
+        'userid', 'sctp', 'decryption', 'config', 'system', 'globalprotect'
+    }
+
+    # --- Per-collector entries ---
+    for logCollector in xmlData.xpath('//response/result/show-logging-status/Conn-Info/entry'):
+        collectorName = logCollector.get('name') or ''
+
+        # Flatten this entry with the iterator
+        panCore.headers = []
+        panCore.devData = {collectorName: {}}
+        for child in logCollector.getchildren():
+            panCore.iterator(element=child, item=collectorName, deleteEntryTag=False)
+        flat_entry = strip_template_keys(panCore.devData.get(collectorName, {}))
+
+        parsed_record = { 'kv': {'failureDetected': False}, 'logs': {} }
+
+        for key, raw_value in flat_entry.items():
+            # Normalize to string and collapse whitespace
+            value = raw_value if isinstance(raw_value, str) else ("" if raw_value is None else str(raw_value))
+            value = " ".join(value.strip().split())
+
+            # Determine tag name (last path component)
+            tag = key.split('.')[-1]
+            tag_lower = tag.lower()
+
+            if tag_lower in expectedLogTypes:
+                # Parse as a log row using simple positional tokens
+                tokens = value.split() if value else []
+                # log type repeats in xml text. Not needed since xml node already tells log type.
+                if tokens and tokens[0].lower() == tag_lower:
+                    tokens = tokens[1:]
+
+                # Handle log types which this firewall doesn't generate.
+                #if len(tokens) >= 2 and tokens[0].lower() == 'not' and tokens[1].lower() == 'available':
+                if "not available" in value.lower():
+                    parsed_record['logs'][tag_lower] = {
+                        'type': tag_lower,
+                        'last_created': 'N/A - log type not generated',
+                    }
+                    continue
+
+                # Expected tokens: ["date", "time", "date", "time", "seq", "seq", "total"]
+                if len(tokens) == 7:
+                    parsed_record['logs'][tag_lower] = {
+                        'type': tag_lower,
+                        'last_created': f"{tokens[0]} {tokens[1]}",
+                        'last_forwarded': f"{tokens[2]} {tokens[3]}",
+                        'last_seq_forwarded': tokens[4],
+                        'last_seq_acked': tokens[5],
+                        'total_forwarded': tokens[6],
+                    }
+                else:
+                    parsed_record['logs'][tag_lower] = {'unparsedData': value}
+            else:
+                # Treat as KV: trim on the first colon if present; otherwise keep as-is
+                if isinstance(value, str) and ":" in value:
+                    left_right = value.split(":", 1)
+                    trimmed = left_right[1].strip() if len(left_right) == 2 else value
+                else:
+                    trimmed = value
+
+                parsed_record['kv'][key] = trimmed
+
+                # Flip failureDetected flag if any stage/status indicates failure
+                try:
+                    if str(key).lower().endswith('.status') and isinstance(trimmed, str) and trimmed.strip().lower() == 'failure':
+                        parsed_record['kv']['failureDetected'] = True
+                except Exception:
+                    pass
+
+        result['details'][collectorName] = parsed_record
+
+    # --- Summary (ConnStatus) parsed only ---
+    status_block = xmlData.xpath('//response/result/show-logging-status/Conn-Info/ConnStatus')
+    if status_block:
+        status_elem = status_block[0]
+        panCore.headers = []
+        panCore.devData = {'ConnStatus': {}}
+        for child in status_elem.getchildren():
+            panCore.iterator(element=child, item='ConnStatus', deleteEntryTag=False)
+        flat_status = strip_template_keys(panCore.devData.get('ConnStatus', {}))
+
+        parsed_summary = {}
+        for key, raw_value in flat_status.items():
+            value = raw_value if isinstance(raw_value, str) else ("" if raw_value is None else str(raw_value))
+            value = " ".join(value.strip().split())
+            # Trim simple "label : value" if present
+            if ":" in value:
+                parts = value.split(":", 1)
+                value = parts[1].strip() if len(parts) == 2 else value
+            # If the remaining value is exactly one datetime, convert it
+            tokens = value.split()
+            if len(tokens) == 2 and regexPattern_Date.match(tokens[0]) and regexPattern_Time.match(tokens[1]):
+                try:
+                    parsed_summary[key] = datetime.strptime(value, "%Y/%m/%d %H:%M:%S")
+                except Exception:
+                    parsed_summary[key] = value
+            else:
+                parsed_summary[key] = value
+
+        result['summary'] = parsed_summary
+        result['summary']['configuredCollectors'] = list(result['details'].keys())
+
+    return result
 
 def firewall_Interfaces(fw_obj: panos.firewall.Firewall) -> Dict[str, dict]:
     logger.info("\tGathering interface info...")

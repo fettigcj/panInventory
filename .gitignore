@@ -3,13 +3,14 @@
 *.json
 *.txt
 *.log*
+.junie/
 .idea/
 __*
 .venv
 *.pdf
 *.zip
-*.sh
-*.bat
 *.xml
 *.tgz
 *.csv
+setVariables.bat
+setVariables.sh

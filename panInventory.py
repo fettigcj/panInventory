@@ -66,8 +66,8 @@ parser.add_argument('-I', '--headless', help="Disable Interactions; operate in h
 parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='panInventory.log')
 parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
 parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='PanInventory.xlsx')
-args = parser.parse_known_args()
-logger = panCore.startLogging(args[0].logfile)
+args, _ = parser.parse_known_args()
+logger = panCore.startLogging(args.logfile)
 
 # Import child modules only after logging is instantiated, so the log output is captured to the parent logger.
 from pancore import panWorkbookFunctions, panGatherFunctions
@@ -108,6 +108,7 @@ def auditFirewall(fw_obj: panos.firewall.Firewall, fwSerial: str):
             'resourceMonitorHistory': tryAudit('firewall_ResourceMonitorHistory', panGatherFunctions.firewall_ResourceMonitorHistory, fw_obj),
             'syslogProfiles': tryAudit('firewall_SyslogProfiles', panGatherFunctions.firewall_SyslogProfiles, fw_obj),
             'deviceLogOutputs': tryAudit('firewall_DeviceLogSettings', panGatherFunctions.firewall_DeviceLogSettings, fw_obj),
+            'logCollectorStatus': tryAudit('firewall_LogCollectorStatus', panGatherFunctions.firewall_LogCollectorStatus, fw_obj),
             'pendingChanges': tryAudit('firewall_PendingLocalChanges', panGatherFunctions.firewall_PendingLocalChanges, fw_obj),
             'zoneProtectionProfiles': tryAudit('firewall_zoneProtectionProfiles', panGatherFunctions.firewall_ZoneProtectionProfiles, getConf),
             'system': tryAudit('either_ShowSystemInfo', panGatherFunctions.either_ShowSystemInfo, fw_obj, fwNameSerial)
@@ -127,7 +128,7 @@ def auditFirewall(fw_obj: panos.firewall.Firewall, fwSerial: str):
 
 
 todayDate = datetime.date.today()
-panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
+panCore.configStart(headless=args.headless, configStorage=args.conffile)
 if hasattr(panCore, 'panUser'):
     pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
 elif hasattr(panCore, 'panKey'):
@@ -157,7 +158,7 @@ for fw_obj in firewalls:
         continue # Jump to next fw_obj if this one is offline. Do not execute further code for this fw_obj.
     try:
         fw_obj.refresh_system_info()
-        # Rrefresh model, PAN-OS version, etc
+        # Refresh model, PAN-OS version, etc
         fwModel = fw_obj.platform
         result = auditFirewall(fw_obj, fwSerial)
         if isinstance(result, dict):
@@ -185,7 +186,7 @@ firewallReports = {
 logger.info("Done w/ summary data dictionaries.")
 
 
-workbook = panWorkbookFunctions.initXLSX(args[0].workbookname)
+workbook = panWorkbookFunctions.initXLSX(args.workbookname)
 #workbook = panWorkbookFunctions.initXLSX('test.xlsx')
 panWorkbookFunctions.writeWorksheet_PanoramaInventory(workbook, panoInventory['devices'])
 panWorkbookFunctions.writeWorksheet_FirewallDetails(workbook, firewallDetails)
@@ -207,4 +208,6 @@ panWorkbookFunctions.writeWorksheet_SystemState(workbook, firewallDetails)
 panWorkbookFunctions.writeWorksheet_EnvironmentalDetails(workbook, firewallDetails, firewallDetailsByModel)
 panWorkbookFunctions.writeWorksheet_SyslogProfiles(workbook, firewallReports['syslogProfiles'])
 panWorkbookFunctions.writeWorksheet_DeviceLogOutputSummary(workbook, firewallReports.get('logOutputs', {}))
+panWorkbookFunctions.writeWorksheet_LogCollectorStatusSummary(workbook, firewallDetails)
+panWorkbookFunctions.writeWorksheet_LogCollectorStatusDetails(workbook, firewallDetails)
 workbook.close()
