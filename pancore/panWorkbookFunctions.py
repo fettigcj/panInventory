@@ -11,6 +11,20 @@ logger = logging.getLogger(__name__)
 # Per-workbook style cache key attached to the xlsxwriter.Workbook instance
 STYLE_CACHE_ATTR = "_pan_style_cache"
 
+# Simple, shared cell normalizer for workbook writers
+# Converts datetime/date objects to strings so Excel sees stable text unless you format as dates
+# This avoids repeating small helpers in each writer.
+def datetime_to_string(value):
+    try:
+        import datetime as _dt
+        if isinstance(value, (_dt.datetime, _dt.date)):
+            if isinstance(value, _dt.datetime):
+                return value.strftime("%Y-%m-%d %H:%M:%S")
+            return value.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    return value
+
 # Helper: decide the format key to use for audit sections based on the value
 # Returns one of: 'blackBox' (for empty/None), 'alertText' (for failures), or None for normal formatting
 # This helper is intentionally simple so it can be unit-tested without creating a Workbook.
@@ -1635,3 +1649,243 @@ def writeWorksheet_DeviceLogOutputSummary(workbook: xlsxwriter.Workbook, logOutp
                 row += 1
 
     logger.info("\tFinished writing Device log output summary worksheet\n")
+
+
+def writeWorksheet_Overrides(workbook: xlsxwriter.Workbook, overridesRows: Dict[str, List[List[str]]]) -> None:
+    """
+    Creates three worksheets: ActiveOverrides, PassiveOverrides, PseudoOverrides.
+    overridesRows expects keys: 'active', 'passive', 'pseudo' with each value being a list of row lists.
+    Each row list should match the headers below.
+    """
+    formats = getattr(workbook, STYLE_CACHE_ATTR)
+    format_rowHeader = formats['rowHeader']
+
+    # Active overrides
+    headers_active = ['Hostname', 'xpath', 'localText', 'panoText', 'localAttrib', 'panoAttrib']
+    ws_active = workbook.add_worksheet("ActiveOverrides")
+    ws_active.write_row("A1", headers_active, format_rowHeader)
+    row_index = 1
+    for row in overridesRows.get('active', []):
+        ws_active.write_row(row_index, 0, row)
+        row_index += 1
+
+    # Passive overrides
+    headers = ['Hostname', 'xpath', 'text', 'attrib']
+    ws_passive = workbook.add_worksheet("PassiveOverrides")
+    ws_passive.write_row("A1", headers, format_rowHeader)
+    row_index = 1
+    for row in overridesRows.get('passive', []):
+        ws_passive.write_row(row_index, 0, row)
+        row_index += 1
+
+    # Pseudo overrides
+    ws_pseudo = workbook.add_worksheet("PseudoOverrides")
+    ws_pseudo.write_row("A1", headers, format_rowHeader)
+    row_index = 1
+    for row in overridesRows.get('pseudo', []):
+        ws_pseudo.write_row(row_index, 0, row)
+        row_index += 1
+
+
+def writeWorksheet_OverrideTemplateStacks(workbook: xlsxwriter.Workbook, allTemplates: Dict, stackData: Dict) -> None:
+    """
+    Reproduces the TemplateStacks layout used by panOverrides: for each stack, write a header row and then rows for
+    each member template with values pulled from allTemplates[template] for the stack's computed headers.
+    """
+    formats = getattr(workbook, STYLE_CACHE_ATTR)
+    format_rowHeader = formats['rowHeader']
+    format_blackBox = formats['blackBox']
+
+    ws = workbook.add_worksheet("TemplateStacks")
+    row = 0
+    for stack, details in stackData.items():
+        headers = ['stackName', 'TemplateName'] + details.get('headers', [])
+        ws.write_row(row, 0, headers, format_rowHeader)
+        row += 1
+        for template in details.get('members', []):
+            ws.write(row, 0, stack)
+            ws.write(row, 1, template)
+            col = 2
+            for header in details.get('headers', []):
+                if header in allTemplates.get(template, {}):
+                    ws.write(row, col, allTemplates[template][header])
+                else:
+                    ws.write(row, col, "", format_blackBox)
+                col += 1
+            row += 1
+
+
+def writeWorksheet_LogCollectorStatusDetails(workbook: xlsxwriter.Workbook, firewallDetails: Dict) -> None:
+    """Write verbose logging-status details per collector/connector.
+
+    Sheet name: "LoggingStatus-Details".
+    Rows: one per entry (collector/connector) per firewall.
+    Columns:
+      - FW Name
+      - EntryName
+      - All discovered KV keys from details[entry]['kv'] (kept as-is)
+      - For each log tag discovered under details[entry]['logs']:
+          tag.last_created, tag.last_forwarded,
+          tag.last_seq_forwarded, tag.last_seq_acked, tag.total_forwarded
+    Any missing values are written with blackBox format.
+    Datetime objects are rendered as ISO-like strings.
+    """
+    logger.info("\tWriting LoggingStatus-Details worksheet.")
+    formats = getattr(workbook, STYLE_CACHE_ATTR)
+    format_rowHeader = formats['rowHeader']
+    format_blackBox = formats['blackBox']
+
+    # Discover union of kv keys and log tags across all devices/entries
+    connectivityHeaders: List[str] = []
+    logtypeHeaders: List[str] = []
+
+    for device in (firewallDetails or {}):
+        loggingStatus = (firewallDetails[device] or {}).get('logCollectorStatus') or {}
+        details = loggingStatus.get('details') or {}
+        for logCollector, logCollectorItems in details.items():
+            connectivityData = (logCollectorItems or {}).get('kv') or {}
+            for connectivityHeader in connectivityData.keys():
+                if connectivityHeader not in connectivityHeaders:
+                    connectivityHeaders.append(connectivityHeader)
+            logTypeData = (logCollectorItems or {}).get('logs') or {}
+            for logType in logTypeData.keys():
+                if logType not in logtypeHeaders:
+                    logtypeHeaders.append(logType)
+
+    # Build dynamic log field headers per log type based on discovered keys
+    # Map: logType -> [field1, field2, ...] (excluding the 'type' label key)
+    log_fields_by_type: Dict[str, List[str]] = {}
+    for device in (firewallDetails or {}):
+        loggingStatus = (firewallDetails[device] or {}).get('logCollectorStatus') or {}
+        details = loggingStatus.get('details') or {}
+        for _entry, items in (details or {}).items():
+            logs_map = (items or {}).get('logs') or {}
+            for logType, parsed in (logs_map or {}).items():
+                if logType not in log_fields_by_type:
+                    log_fields_by_type[logType] = []
+                if isinstance(parsed, dict):
+                    for fld in parsed.keys():
+                        if fld == 'type':
+                            continue
+                        if fld not in log_fields_by_type[logType]:
+                            log_fields_by_type[logType].append(fld)
+
+    # Compose flattened log headers like "<logType>.<field>"
+    log_headers: List[str] = []
+    for logType in logtypeHeaders:
+        for fld in log_fields_by_type.get(logType, []):
+            log_headers.append(f"{logType}.{fld}")
+
+    worksheet = workbook.add_worksheet("LogCollectorStatus-Details")
+    headers: List[str] = ['FW Name', 'FW Serial', 'EntryName'] + connectivityHeaders + log_headers
+    worksheet.write_row(0, 0, headers, format_rowHeader)
+
+    # Write rows
+    row = 1
+    for device in (firewallDetails or {}):
+        sys_info = (firewallDetails[device] or {}).get('system', {}) or {}
+        fwName = sys_info.get('hostname', device)
+        # Derive fwSerial: prefer system.serial, fallback to loggingStatus.fw_serial or parse from device key
+        loggingStatus = (firewallDetails[device] or {}).get('logCollectorStatus') or {}
+        fwSerial = sys_info.get('serial') or loggingStatus.get('fw_serial')
+        if not fwSerial and isinstance(device, str) and '(' in device and device.endswith(')'):
+            try:
+                fwSerial = device.rsplit('(', 1)[1][:-1]
+            except Exception:
+                fwSerial = None
+        details = loggingStatus.get('details') or {}
+        for logCollector, logCollectorItems in details.items():
+            col = 0
+            worksheet.write(row, col, fwName); col += 1
+            worksheet.write(row, col, fwSerial); col += 1
+            worksheet.write(row, col, logCollector); col += 1
+
+            connectivityData = (logCollectorItems or {}).get('kv') or {}
+            # Write KV columns
+            for connectivityHeader in connectivityHeaders:
+                if connectivityHeader in connectivityData:
+                    worksheet.write(row, col, datetime_to_string(connectivityData.get(connectivityHeader)))
+                else:
+                    worksheet.write(row, col, '', format_blackBox)
+                col += 1
+
+            # Write LOG columns
+            logTypeData = (logCollectorItems or {}).get('logs') or {}
+            for logType in logtypeHeaders:
+                parsed = logTypeData.get(logType) or {}
+                # Use dynamic fields for each logType
+                for fld in log_fields_by_type.get(logType, []):
+                    if fld in parsed:
+                        worksheet.write(row, col, datetime_to_string(parsed.get(fld)))
+                    else:
+                        worksheet.write(row, col, '', format_blackBox)
+                    col += 1
+            row += 1
+    logger.info("\tFinished Writing LoggingStatus-Details worksheet\n")
+
+
+
+def writeWorksheet_LogCollectorStatusSummary(workbook: xlsxwriter.Workbook, firewallDetails: Dict) -> None:
+    """Write verbose logging-status connection summary per firewall.
+
+    Sheet name: "LoggingStatus-Summary".
+    Rows: one per firewall device in firewallDetails.
+    Columns: 'FW Name' followed by union of keys from logCollectorStatus['summary'].
+    Datetime objects are rendered as ISO-like strings.
+    """
+    logger.info("\tWriting LoggingStatus-Summary worksheet.")
+    formats = getattr(workbook, STYLE_CACHE_ATTR)
+    format_rowHeader = formats['rowHeader']
+    format_blackBox = formats['blackBox']
+
+    # Discover union of summary keys
+    sum_headers: List[str] = []
+    for device in (firewallDetails or {}):
+        ls = (firewallDetails[device] or {}).get('logCollectorStatus') or {}
+        summary = ls.get('summary') or {}
+        for k in summary.keys():
+            if k not in sum_headers:
+                sum_headers.append(k)
+
+    worksheet = workbook.add_worksheet("LogCollectorStatus-Summary")
+    headers = ['FW Name', 'FW Serial'] + sum_headers
+    worksheet.write_row(0, 0, headers, format_rowHeader)
+
+    row = 1
+    for device in (firewallDetails or {}):
+        sys_info = (firewallDetails[device] or {}).get('system', {}) or {}
+        fwName = sys_info.get('hostname', device)
+        ls = (firewallDetails[device] or {}).get('logCollectorStatus') or {}
+        fwSerial = sys_info.get('serial') or ls.get('fw_serial')
+        if not fwSerial and isinstance(device, str) and '(' in device and device.endswith(')'):
+            try:
+                fwSerial = device.rsplit('(', 1)[1][:-1]
+            except Exception:
+                fwSerial = None
+        summary = ls.get('summary') or {}
+        worksheet.write(row, 0, fwName)
+        worksheet.write(row, 1, fwSerial)
+        col = 2
+        for k in sum_headers:
+            if k in summary:
+                value = datetime_to_string(summary.get(k))
+                # Coerce non-scalar structures to readable strings to avoid xlsxwriter TypeError
+                try:
+                    if isinstance(value, (list, tuple, set)):
+                        value = ", ".join(str(item) for item in value)
+                    elif isinstance(value, dict):
+                        # Stable, compact representation: key: value pairs
+                        value = ", ".join(f"{str(key)}: {str(val)}" for key, val in value.items())
+                except Exception:
+                    # Fallback to str() for anything unexpected
+                    try:
+                        value = str(value)
+                    except Exception:
+                        value = ''
+                worksheet.write(row, col, value)
+            else:
+                worksheet.write(row, col, '', format_blackBox)
+            col += 1
+        row += 1
+
+    logger.info("\tFinished Writing LoggingStatus-Summary worksheet\n")

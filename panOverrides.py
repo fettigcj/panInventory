@@ -30,10 +30,10 @@ parser.add_argument('-l', '--headless', help="Operate in headless mode, without 
 parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='OverrideFinder.log')
 parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
 parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='Overrides.xlsx')
-args = parser.parse_known_args()
+args, _ = parser.parse_known_args()
 
-panCore.startLogging(args[0].logfile)
-panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
+logger = panCore.startLogging(args.logfile)
+panCore.configStart(headless=args.headless, configStorage=args.conffile)
 
 if hasattr(panCore, 'panUser'):
     pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
@@ -51,8 +51,7 @@ def mainProc(fw_obj):
     sysInfo = fw_obj.show_system_info()
     serialNumber = sysInfo['system']['serial']
     hostname = sysInfo['system']['hostname']
-    panCore.logging.info(
-        f"  {hostname} ({fwNum}/{fwCount}) connected. {fwAuditStartTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
+    panCore.logging.info(f"  {hostname} ({fwNum}/{fwCount}) connected. {fwAuditStartTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
     overrides = {'sysInfo': sysInfo['system'],
                                'activeOverrides': {},
                                'pseudoPassiveOverrides': {},
@@ -149,87 +148,82 @@ def templateOverrides():
 
 def writeFirewallData(overrides):
     fwName = overrides['sysInfo']['hostname']
-    global row_active, row_pseudo, row_passive
+    global overridesRows
+    # Active overrides
     if len(overrides['activeOverrides']):
         for xpath in overrides['activeOverrides'].keys():
             if xpath in skipPath:
                 continue
-            panCore.wsActive.write(row_active, 0, fwName)
-            panCore.wsActive.write(row_active, 1, xpath.replace("/response/result", ""))
-            panCore.wsActive.write(row_active, 2, overrides['activeOverrides'][xpath]['lclText'])
-            panCore.wsActive.write(row_active, 3, overrides['activeOverrides'][xpath]['tplText'])
-            if not len(overrides['activeOverrides'][xpath]['lclAttributes']):
-                panCore.wsActive.write(row_active, 4, "")
-            else:
+            lcl_attr = overrides['activeOverrides'][xpath]['lclAttributes']
+            tpl_attr = overrides['activeOverrides'][xpath]['tplAttributes']
+            lcl_attr_str = ""
+            if len(lcl_attr):
                 var1 = ""
-                attrib = overrides['activeOverrides'][xpath]['lclAttributes']
-                for key in attrib:
-                    var1 += f"{key}: {attrib[key]} | "
-                panCore.wsActive.write(row_active, 4, var1[:-3])
-                # Convert XML attributes to pipe separated 'key: value' pairs, then take off the last three characters
-                # to eliminate the trailing " | " from the end of the string.
-            if not len(overrides['activeOverrides'][xpath]['tplAttributes']):
-                panCore.wsActive.write(row_active, 5, "")
-            else:
+                for key in lcl_attr:
+                    var1 += f"{key}: {lcl_attr[key]} | "
+                lcl_attr_str = var1[:-3]
+            tpl_attr_str = ""
+            if len(tpl_attr):
                 var1 = ""
-                attrib = overrides['activeOverrides'][xpath]['tplAttributes']
-                for key in attrib:
-                    var1 += f"{key}: {attrib[key]} | "
-                panCore.wsActive.write(row_active, 5, var1[:-3])
-            row_active += 1
+                for key in tpl_attr:
+                    var1 += f"{key}: {tpl_attr[key]} | "
+                tpl_attr_str = var1[:-3]
+            overridesRows['active'].append([
+                fwName,
+                xpath.replace("/response/result", ""),
+                overrides['activeOverrides'][xpath]['lclText'],
+                overrides['activeOverrides'][xpath]['tplText'],
+                lcl_attr_str,
+                tpl_attr_str
+            ])
+    # Passive overrides
     if len(overrides['passiveOverrides']):
         for xpath in overrides['passiveOverrides']:
             if xpath in skipPath:
                 continue
-            panCore.wsPassive.write(row_passive, 0, fwName)
-            panCore.wsPassive.write(row_passive, 1, xpath.replace("/response/result", ""))
-            panCore.wsPassive.write(row_passive, 2, overrides['passiveOverrides'][xpath]['Text'])
-            if not len(overrides['passiveOverrides'][xpath]['Attributes']):
-                panCore.wsPassive.write(row_passive, 3, "")
-            else:
+            attrib = overrides['passiveOverrides'][xpath]['Attributes']
+            attrib_str = ""
+            if len(attrib):
                 var1 = ""
-                attrib = overrides['passiveOverrides'][xpath]['Attributes']
                 for key in attrib:
                     var1 += f"{key}: {attrib[key]} | "
-                panCore.wsPassive.write(row_passive, 3, var1[:-3])
-            row_passive += 1
+                attrib_str = var1[:-3]
+            overridesRows['passive'].append([
+                fwName,
+                xpath.replace("/response/result", ""),
+                overrides['passiveOverrides'][xpath]['Text'],
+                attrib_str
+            ])
+    # Pseudo-passive overrides
     if len(overrides['pseudoPassiveOverrides']):
         for xpath in overrides['pseudoPassiveOverrides']:
             if xpath in skipPath:
                 continue
-            panCore.wsPseudo.write(row_pseudo, 0, fwName)
-            panCore.wsPseudo.write(row_pseudo, 1, xpath.replace("/response/result", ""))
-            panCore.wsPseudo.write(row_pseudo, 2, overrides['pseudoPassiveOverrides'][xpath]['Text'])
-            if not len(overrides['pseudoPassiveOverrides'][xpath]['Attributes']):
-                panCore.wsPseudo.write(row_pseudo, 3, "")
-            else:
+            attrib = overrides['pseudoPassiveOverrides'][xpath]['Attributes']
+            attrib_str = ""
+            if len(attrib):
                 var1 = ""
-                attrib = overrides['pseudoPassiveOverrides'][xpath]['Attributes']
                 for key in attrib:
                     var1 += f"{key}: {attrib[key]} | "
-                panCore.wsPseudo.write(row_pseudo, 3, var1[:-3])
-            row_pseudo += 1
+                attrib_str = var1[:-3]
+            overridesRows['pseudo'].append([
+                fwName,
+                xpath.replace("/response/result", ""),
+                overrides['pseudoPassiveOverrides'][xpath]['Text'],
+                attrib_str
+            ])
 
 
 #Prep report gathering state & logging info
 startTime = datetime.datetime.now(datetime.timezone.utc)
-panCore.initXLSX(args[0].workbookname)
+# Initialize workbook using new workbook module
+from pancore import panWorkbookFunctions
+workbook = panWorkbookFunctions.initXLSX(args.workbookname)
 panCore.logging.info(f"Starting audit at {startTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
 fwCount = len(firewalls)
 fwNum = 0
-#Prep Excel workbook to receive data
-headersActive = ['Hostname', 'xpath', 'localText', 'panoText', 'localAttrib', 'panoAttrib']
-headers = ['Hostname', 'xpath', 'text', 'attrib']
-panCore.wsActive = panCore.workbook_obj.add_worksheet("ActiveOverrides")
-panCore.wsActive.write_row("A1", headersActive, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
-panCore.wsPassive = panCore.workbook_obj.add_worksheet("PassiveOverrides")
-panCore.wsPassive.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
-panCore.wsPseudo = panCore.workbook_obj.add_worksheet("PseudoOverrides")
-panCore.wsPseudo.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
-
-row_active = 1
-row_passive = 1
-row_pseudo = 1
+# Prepare in-memory collections for writer functions
+overridesRows = {'active': [], 'passive': [], 'pseudo': []}
 skipPath = ['/response', '/response/result']
 
 for fw_obj in firewalls:
@@ -244,27 +238,11 @@ for fw_obj in firewalls:
         panCore.logging.exception(f"Exception encountered: {e.message}")
 
 allTemplates, stackData = templateOverrides()
-panCore.wsTemplateStacks = panCore.workbook_obj.add_worksheet("TemplateStacks")
-row = 0
-for stack in stackData:
-    panCore.wsTemplateStacks.write_row(row, 0, ['stackName', 'TemplateName'] + stackData[stack]['headers'], panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
-    row += 1
-    for template in stackData[stack]['members']:
-        panCore.wsTemplateStacks.write(row, 0, stack)
-        panCore.wsTemplateStacks.write(row, 1, template)
-        col = 2
-        for header in stackData[stack]['headers']:
-            if header in allTemplates[template]:
-                panCore.wsTemplateStacks.write(row, col, allTemplates[template][header])
-            else:
-                panCore.wsTemplateStacks.write(row, col, "", panCore.workbook_obj.add_format((panExcelStyles.styles['blackBox'])))
-            col += 1
-        row += 1
-
-
+# Delegate all worksheet creation/writing to panWorkbookFunctions (align with panInventory standards)
+panWorkbookFunctions.writeWorksheet_Overrides(workbook, overridesRows)
+panWorkbookFunctions.writeWorksheet_OverrideTemplateStacks(workbook, allTemplates, stackData)
 
 endTime = datetime.datetime.now(datetime.timezone.utc)
 panCore.logging.info(f"Finished gathering data from Panorama at {endTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}. (In {round((((endTime - startTime).total_seconds())/60),4)} minutes)")
 
-
-panCore.workbook_obj.close()
+workbook.close()

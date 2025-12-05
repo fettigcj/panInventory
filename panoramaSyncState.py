@@ -29,7 +29,7 @@ Report panorama syncronization / issues:
 """
 
 import panos
-from pancore import panCore, panExcelStyles
+from pancore import panCore, panExcelStyles, panWorkbookFunctions
 from panos.panorama import PanoramaCommitAll
 import sys, json, ast
 import datetime, argparse, time
@@ -50,11 +50,11 @@ parser.add_argument('-I', '--headless', help="Disable Interactions; operate in h
 parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='panoSync.log')
 parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
 parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='panoSync.xlsx')
-args = parser.parse_known_args()
+args, _ = parser.parse_known_args()
 
 todayDate = datetime.date.today()
-panCore.startLogging(args[0].logfile)
-panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
+logger = panCore.startLogging(args.logfile)
+panCore.configStart(headless=args.headless, configStorage=args.conffile)
 if hasattr(panCore, 'panUser'):
     pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
 elif hasattr(panCore, 'panKey'):
@@ -321,22 +321,19 @@ for jobID in jobResults.keys():
                 deviceDetails[key] = jobResults[jobID]['devices'][device][key]
         jobResultsPerDevice[device] = {**jobDetails, **deviceDetails}
 
-with open(args[0].workbookname.replace(".xlsx", ".txt"), 'w') as writer:
+with open(args.workbookname.replace(".xlsx", ".txt"), 'w') as writer:
     writer.write(json.dumps(jobResults, indent=4))
 
+workbook = panWorkbookFunctions.initXLSX(args.workbookname)
+formats = getattr(workbook, panWorkbookFunctions.STYLE_CACHE_ATTR)
 
-
-
-
-panCore.initXLSX(args[0].workbookname)
-
-worksheet = panCore.workbook_obj.add_worksheet('Uncommitted Panorama Changes')
+worksheet = workbook.add_worksheet('Uncommitted Panorama Changes')
 headers = ['ChangeNumber']
 for changeNumber in uncommittedChanges:
     for key in uncommittedChanges[changeNumber].keys():
         if key not in headers:
             headers.append(key)
-worksheet.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
+worksheet.write_row("A1", headers, formats['rowHeader'])
 headers.remove('ChangeNumber')
 row = 1
 for changeNumber in uncommittedChanges:
@@ -346,31 +343,30 @@ for changeNumber in uncommittedChanges:
         if header in uncommittedChanges[changeNumber]:
             worksheet.write(row, col, uncommittedChanges[changeNumber][header])
         else:
-            worksheet.write(row, col, "", panCore.workbook_obj.add_format((panExcelStyles.styles['blackBox'])))
+            worksheet.write(row, col, "", formats['blackBox'])
         col += 1
     row += 1
 
-worksheet = panCore.workbook_obj.add_worksheet("Panorama HA State")
+worksheet = workbook.add_worksheet("Panorama HA State")
 headers = []
 for key in highAvaialabilityState['haAll']:
     if key not in headers:
         headers.append(key)
-worksheet.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
+worksheet.write_row("A1", headers, formats['rowHeader'])
 row = 1
 col = 0
 for header in headers:
     worksheet.write(row, col, highAvaialabilityState['haAll'][header])
     col += 1
 
-
-worksheet = panCore.workbook_obj.add_worksheet("ValidationJobDetails")
+worksheet = workbook.add_worksheet("ValidationJobDetails")
 headers = ['serial-no', 'devicename']
 for device in jobResultsPerDevice:
     for key in jobResultsPerDevice[device]:
         if key not in headers:
             headers.append(key)
 
-worksheet.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
+worksheet.write_row("A1", headers, formats['rowHeader'])
 row = 1
 for deviceSN in jobResultsPerDevice:
     col = 0
@@ -378,108 +374,108 @@ for deviceSN in jobResultsPerDevice:
         if header in jobResultsPerDevice[deviceSN]:
             worksheet.write(row, col, jobResultsPerDevice[deviceSN][header])
         else:
-            worksheet.write(row, col, "", panCore.workbook_obj.add_format((panExcelStyles.styles['blackBox'])))
+            worksheet.write(row, col, "", formats['blackBox'])
         col += 1
     row +=1
 
 
-worksheet = panCore.workbook_obj.add_worksheet("ValidationMessages")
+worksheet = workbook.add_worksheet("ValidationMessages")
 headers = ['serial', 'hostname']
 for deviceSN in genericWarnings:
     for key in genericWarnings[deviceSN]:
         if key not in headers:
             headers.append(key)
-worksheet.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
+worksheet.write_row("A1", headers, formats['rowHeader'])
 row = 1
 for deviceSN in genericWarnings:
     worksheet.write(row, 0, deviceSN)
     if genericWarnings[deviceSN]['hostname'] is not None:
         worksheet.write(row, 1, genericWarnings[deviceSN]['hostname'])
     else:
-        worksheet.write(row, 1, "", panCore.workbook_obj.add_format((panExcelStyles.styles['blackBox'])))
+        worksheet.write(row, 1, "", formats['blackBox'])
     if genericWarnings[deviceSN]['errors'] != "":
-        worksheet.write(row, 2, genericWarnings[deviceSN]['errors'], panCore.workbook_obj.add_format((panExcelStyles.styles['wrappedText'])))
+        worksheet.write(row, 2, genericWarnings[deviceSN]['errors'], formats['wrappedText'])
     else:
-        worksheet.write(row, 2, "", panCore.workbook_obj.add_format((panExcelStyles.styles['blackBox'])))
+        worksheet.write(row, 2, "", formats['blackBox'])
     if genericWarnings[deviceSN]['warnings'] != "":
-        worksheet.write(row, 3, genericWarnings[deviceSN]['warnings'], panCore.workbook_obj.add_format((panExcelStyles.styles['wrappedText'])))
+        worksheet.write(row, 3, genericWarnings[deviceSN]['warnings'], formats['wrappedText'])
     else:
-        worksheet.write(row, 3, "", panCore.workbook_obj.add_format((panExcelStyles.styles['blackBox'])))
+        worksheet.write(row, 3, "", formats['blackBox'])
     row +=1
 
-worksheet = panCore.workbook_obj.add_worksheet('TemplateStackDetails')
+worksheet = workbook.add_worksheet('TemplateStackDetails')
 headers = ['Name', 'Description', 'MemberTemplates', 'Devices', 'Settings', 'templateVariables', 'ConfigLineCount', 'LocalConfig', 'UserID_MasterDevice']
-worksheet.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
+worksheet.write_row("A1", headers, formats['rowHeader'])
 row = 1
 for templateStack in templateStacks:
     worksheet.write(row, 0, templateStack)
     worksheet.write(row, 1, templateStacks[templateStack]['templateDescription'])
-    worksheet.write(row, 2, templateStacks[templateStack]['templateMembers'], panCore.workbook_obj.add_format((panExcelStyles.styles['wrappedText'])))
-    worksheet.write(row, 3, templateStacks[templateStack]['templateDevices'], panCore.workbook_obj.add_format((panExcelStyles.styles['wrappedText'])))
-    worksheet.write(row, 4, templateStacks[templateStack]['templateSettings'], panCore.workbook_obj.add_format((panExcelStyles.styles['wrappedText'])))
-    worksheet.write(row, 5, templateStacks[templateStack]['templateVariables'], panCore.workbook_obj.add_format((panExcelStyles.styles['wrappedText'])))
+    worksheet.write(row, 2, templateStacks[templateStack]['templateMembers'], formats['wrappedText'])
+    worksheet.write(row, 3, templateStacks[templateStack]['templateDevices'], formats['wrappedText'])
+    worksheet.write(row, 4, templateStacks[templateStack]['templateSettings'], formats['wrappedText'])
+    worksheet.write(row, 5, templateStacks[templateStack]['templateVariables'], formats['wrappedText'])
     worksheet.write(row, 6, templateStacks[templateStack]['templateConfigLineCount'])
-    worksheet.write(row, 7, templateStacks[templateStack]['templateConfig'], panCore.workbook_obj.add_format((panExcelStyles.styles['wrappedText'])))
+    worksheet.write(row, 7, templateStacks[templateStack]['templateConfig'], formats['wrappedText'])
     worksheet.write(row, 8, templateStacks[templateStack]['templateUserIdentificationMasterDevice'])
     row += 1
 
 
-worksheet = panCore.workbook_obj.add_worksheet("TemplateSyncStates")
+worksheet = workbook.add_worksheet("TemplateSyncStates")
 headers = ['serial', 'hostname', 'templateName', 'templateType']
 for deviceSN in templateSyncStates:
     for key in templateSyncStates[deviceSN]:
         if key not in headers:
             headers.append(key)
-worksheet.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
+worksheet.write_row("A1", headers, formats['rowHeader'])
 row = 1
 for deviceSN in templateSyncStates:
     col = 0
     for header in headers:
         if header in templateSyncStates[deviceSN]:
             if header == 'template-status' and templateSyncStates[deviceSN][header].lower() != "in sync":
-                worksheet.write(row, col, templateSyncStates[deviceSN][header], panCore.workbook_obj.add_format(panExcelStyles.styles['alertText']))
+                worksheet.write(row, col, templateSyncStates[deviceSN][header], formats['alertText'])
             elif header == 'template-no-content-preview-status' and templateSyncStates[deviceSN][header].lower() != 'in sync':
-                worksheet.write(row, col, templateSyncStates[deviceSN][header], panCore.workbook_obj.add_format(panExcelStyles.styles['alertText']))
+                worksheet.write(row, col, templateSyncStates[deviceSN][header], formats['alertText'])
             elif header == 'unsupported-version' and templateSyncStates[deviceSN][header] != 'no':
-                worksheet.write(row, col, templateSyncStates[deviceSN][header], panCore.workbook_obj.add_format(panExcelStyles.styles['alertText']))
+                worksheet.write(row, col, templateSyncStates[deviceSN][header], formats['alertText'])
             elif header == 'connected' and templateSyncStates[deviceSN][header] != 'yes':
-                worksheet.write(row, col, templateSyncStates[deviceSN][header], panCore.workbook_obj.add_format(panExcelStyles.styles['alertText']))
+                worksheet.write(row, col, templateSyncStates[deviceSN][header], formats['alertText'])
             else:
                 worksheet.write(row, col, templateSyncStates[deviceSN][header])
         else:
-            worksheet.write(row, col, "", panCore.workbook_obj.add_format((panExcelStyles.styles['blackBox'])))
+            worksheet.write(row, col, "", formats['blackBox'])
         col += 1
     row +=1
 
 
-worksheet = panCore.workbook_obj.add_worksheet("DeviceGroupSyncStates")
+worksheet = workbook.add_worksheet("DeviceGroupSyncStates")
 headers = ['serial', 'hostname', 'deviceGroupName']
 for deviceSN in deviceGroupSyncStates:
     for key in deviceGroupSyncStates[deviceSN]:
         if key not in headers:
             headers.append(key)
-worksheet.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
+worksheet.write_row("A1", headers, formats['rowHeader'])
 row = 1
 for deviceSN in deviceGroupSyncStates:
     col = 0
     for header in headers:
         if header in deviceGroupSyncStates[deviceSN]:
             if header == 'shared-policy-status' and deviceGroupSyncStates[deviceSN][header].lower() != "in sync":
-                worksheet.write(row, col, deviceGroupSyncStates[deviceSN][header], panCore.workbook_obj.add_format(panExcelStyles.styles['alertText']))
+                worksheet.write(row, col, deviceGroupSyncStates[deviceSN][header], formats['alertText'])
             elif header == 'unsupported-version' and deviceGroupSyncStates[deviceSN][header] != 'no':
-                worksheet.write(row, col, deviceGroupSyncStates[deviceSN][header], panCore.workbook_obj.add_format(panExcelStyles.styles['alertText']))
+                worksheet.write(row, col, deviceGroupSyncStates[deviceSN][header], formats['alertText'])
             elif header == 'connected' and deviceGroupSyncStates[deviceSN][header] != 'yes':
-                worksheet.write(row, col, deviceGroupSyncStates[deviceSN][header], panCore.workbook_obj.add_format(panExcelStyles.styles['alertText']))
+                worksheet.write(row, col, deviceGroupSyncStates[deviceSN][header], formats['alertText'])
             else:
                 worksheet.write(row, col, deviceGroupSyncStates[deviceSN][header])
         else:
-            worksheet.write(row, col, "", panCore.workbook_obj.add_format((panExcelStyles.styles['blackBox'])))
+            worksheet.write(row, col, "", formats['blackBox'])
         col += 1
     row +=1
 
-worksheet = panCore.workbook_obj.add_worksheet("ApplicationDependencies")
+worksheet = workbook.add_worksheet("ApplicationDependencies")
 headers = ['rule UUID', 'Instance', 'Rule Name', 'Rule Type', 'AppNumber', 'App-ID', 'RequiredApps', 'usedBy']
-worksheet.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
+worksheet.write_row("A1", headers, formats['rowHeader'])
 row = 1
 for ruleID in appDependencies:
     for ruleInstance in appDependencies[ruleID]:
@@ -496,9 +492,9 @@ for ruleID in appDependencies:
                 row += 1
 
 
-worksheet = panCore.workbook_obj.add_worksheet("ShadowingRules")
+worksheet = workbook.add_worksheet("ShadowingRules")
 headers = ['rule UUID', 'Instance', 'Rule Name', 'Rule Type', 'RulesShadowed', 'usedBy']
-worksheet.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
+worksheet.write_row("A1", headers, formats['rowHeader'])
 row = 1
 for ruleID in rulesShadowed:
     for ruleInstance in rulesShadowed[ruleID]:
@@ -510,4 +506,4 @@ for ruleID in rulesShadowed:
         worksheet.write(row, 5, str(rulesShadowed[ruleID][ruleInstance]['ruleUsedIn']))
         row += 1
 
-panCore.workbook_obj.close()
+workbook.close()
