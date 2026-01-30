@@ -1,13 +1,13 @@
-#from panInventory import clusterDetails
 from pancore import panCore
 import panos
+from panos.errors import PanDeviceXapiError
 from panos.panorama import Panorama
 from panos.firewall import Firewall
 from panos.network import Zone
 from panos.device import SystemSettings, SyslogServer, SyslogServerProfile
-from typing import Dict, List, Tuple, Union, Any
-import lxml, logging, copy, re
-from datetime import datetime
+from typing import Dict, List, Tuple, Union, Any, Optional
+import lxml, logging, copy, re, time, os
+from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 
@@ -103,6 +103,172 @@ def either_ShowSystemInfo(pan_obj: Union[panos.panorama.Panorama, panos.firewall
     for setting in xmlData.xpath("./result/system")[0].getchildren():
         panCore.iterator(setting, fwNameSerial)
     return panCore.devData[fwNameSerial]
+
+
+def either_RunExportAndDownload(pan_obj: Union[panos.firewall.Firewall, panos.panorama.Panorama], exportType: str, file_prefix: str = "", output_dir: str = ".", retry_limit: int = 10, retry_interval: int = 60, known_hostname: Optional[str] = None, known_serial: Optional[str] = None) -> Tuple[bool, str, str, str]:
+    """
+    End-to-end helper to request an export (tech-support or stats-dump),
+    poll until completion, download the resulting file, and save to disk.
+
+    :param pan_obj: PAN-OS object (Firewall or Panorama) to run the export on.
+    :param exportType: 'tech_support' | 'stats_dump' | 'tech-support' | 'stats-dump'
+    :param file_prefix: Optional prefix for the saved filename.
+    :param output_dir: Directory path to save the exported tgz.
+    :param retry_limit: Maximum number of attempts to obtain a job id (default 10).
+    :param retry_interval: Seconds to wait between attempts when no job id is returned (default 60s).
+    :param known_hostname: If provided, use this hostname for logging and filenames instead of querying the device.
+    :param known_serial: If provided, may be used in logging; does not affect behavior otherwise.
+    :return: Tuple (is_successful, job_id, saved_file_path, message)
+    """
+    exportType = (exportType or "").replace("_", "-")
+    if exportType not in {"tech-support", "stats-dump"}:
+        error_message = "exportType must be 'tech_support' or 'stats_dump'"
+        logger.error(error_message)
+        return False, "", "", error_message
+
+    # Prefer provided identifiers to avoid redundant lookups
+    hostname = (known_hostname or "").strip()
+    if not hostname:
+        try:
+            system_info = pan_obj.show_system_info()
+            hostname = system_info.get('system', {}).get('hostname', 'unknown-hostname')
+        except Exception:
+            hostname = getattr(pan_obj, 'hostname', None) or getattr(pan_obj, 'name', None) or 'unknown-hostname'
+
+    startTime_UTC = datetime.now(timezone.utc)
+    panSerial = (known_serial or getattr(pan_obj, 'serial', None) or '').strip()
+    panLabel = f"{hostname} ({panSerial})" if panSerial else ""
+    logger.info(f"Requesting export '{exportType}' for {panLabel} at {startTime_UTC.strftime('%Y/%m/%d, %H:%M:%S - UTC')}")
+
+    # Queue export and extract job id with retry support
+    job_id = ""
+    retry_number = 1
+    last_message = ""
+    while (not job_id) and (retry_number <= retry_limit):
+        xml_response = None  # reset to avoid any accidental reuse across attempts
+        logger.info(f"Attempt {retry_number}/{retry_limit} to queue export of {exportType} for {panLabel}...")
+        if retry_number == retry_limit:
+            logger.warning(f"\t Retry limit ({retry_limit}) reached. This will be our final attempt before giving up...")
+        try:
+            xml_response = panCore.xmlToLXML(pan_obj.xapi.export(category=exportType))
+            jobStarted_UTC = datetime.now(timezone.utc)
+            job_element = xml_response.find('.//job')
+            if job_element is None or job_element.text is None:
+                serialized = lxml.etree.tostring(xml_response, encoding='unicode')
+                last_message = f"Did not receive a job id when starting export for {panLabel}: {serialized}"
+                logger.warning(f"Attempt {retry_number}/{retry_limit}: {last_message}")
+                if retry_number < retry_limit:
+                    logger.info(f"Waiting {retry_interval} seconds before retrying...")
+                    time.sleep(retry_interval)
+                retry_number += 1
+                continue
+            job_id = job_element.text
+            break
+        except Exception as exc:
+            last_message = str(exc)
+            if isinstance(exc, PanDeviceXapiError) and "generation" in last_message.lower() and "pending" in last_message.lower():
+                # If another export generation is already running, wait and retry without logging stack trace noise
+                # expected phrase 'Another generation is pending' may vary slightly among pan-os versions.
+                # testing for 'generation' and 'pending' should successfully identify when another job is running.
+                logger.info(f"\tDuring attempt {retry_number}/{retry_limit} another export was already running on {panLabel}; waiting {retry_interval} seconds before retrying.")
+                time.sleep(retry_interval)
+                retry_number += 1
+                continue
+            else:
+                # Generic failure path with traceback for diagnostics
+                logger.exception(f"Attempt {retry_number}/{retry_limit} failed to queue export '{exportType}' for {panLabel} due to error message: {last_message}")
+                logger.info(f"Unexpected error encountered. Waiting {retry_interval} seconds before retrying...")
+                time.sleep(retry_interval)
+                retry_number += 1
+            continue
+
+    if not job_id:
+        return False, "", "", (last_message or "job-id-missing")
+    else:
+        logger.info(f"Export type '{exportType}' scheduled as job {job_id} for {panLabel} at {jobStarted_UTC.strftime('%Y/%m/%d, %H:%M:%S - UTC')}")
+
+    # Initial status check after a short delay (gives device time to register and start job. No job expected to take less than 60 seconds to complete.)
+    time.sleep(60)
+    try:
+        xml_status = panCore.xmlToLXML(pan_obj.xapi.export(category=exportType, extra_qs=f'action=status&job-id={job_id}'))
+        job_state = (xml_status.find('.//status').text if xml_status.find('.//status') is not None else '')
+    except Exception:
+        job_state = ''
+
+    wait_counter = 1
+    while (job_state == 'ACT') and (wait_counter <= retry_limit):
+        try:
+            time.sleep(retry_interval)
+            xml_status = panCore.xmlToLXML(pan_obj.xapi.export(category=exportType, extra_qs=f'action=status&job-id={job_id}'))
+            job_state = (xml_status.find('.//status').text if xml_status.find('.//status') is not None else '')
+            job_progress = (xml_status.find('.//progress').text if xml_status.find('.//progress') is not None else '')
+            logger.info(f"    > Job {job_id} for {hostname} still active after poll #{wait_counter}. Current Progress: {job_progress}. Waiting {retry_interval} seconds before next check.")
+        except Exception as exc:
+            logger.exception(f"Failed while polling job {job_id} for {hostname}")
+            return False, job_id, "", str(exc)
+        wait_counter += 1
+
+    # If we've exceeded retry_limit and the job is still active, give up with timeout
+    if job_state == 'ACT':
+        timeout_time_utc = datetime.now(timezone.utc)
+        logger.error(f"Job {job_id} for {hostname} still 'ACT' after {retry_limit} polls at {timeout_time_utc.strftime('%Y/%m/%d, %H:%M:%S - UTC')}. Timing out.")
+        try:
+            serialized = lxml.etree.tostring(xml_status, pretty_print=True, encoding='utf-8', xml_declaration=True)
+            error_filename = f"exportTimeout_{hostname}_{exportType.replace('-', '_')}.xml"
+            error_path = os.path.join(output_dir or '.', error_filename)
+            with open(error_path, 'wb') as file_descriptor:
+                file_descriptor.write(serialized)
+            logger.error(f"Wrote timeout XML to {error_path}")
+        except Exception:
+            logger.error("Failed to write timeout XML to disk.")
+        return False, job_id, "", "job-poll-timeout"
+
+    finished_time_utc = datetime.now(timezone.utc)
+    logger.info(f"Job {job_id} for {hostname} is no longer active at {finished_time_utc.strftime('%Y/%m/%d, %H:%M:%S - UTC')}")
+
+    if job_state != 'FIN':
+        try:
+            serialized = lxml.etree.tostring(xml_status, pretty_print=True, encoding='utf-8', xml_declaration=True)
+            error_filename = f"exportError_{hostname}_{exportType.replace('-', '_')}.xml"
+            error_path = os.path.join(output_dir or '.', error_filename)
+            with open(error_path, 'wb') as file_descriptor:
+                file_descriptor.write(serialized)
+            logger.error(f"Job state was '{job_state}'. Wrote error XML to {error_path}")
+        except Exception:
+            logger.error(f"Job state was '{job_state}'. Additionally failed to write error XML to disk.")
+        return False, job_id, "", f"unexpected-job-state:{job_state}"
+
+    # Download file (with fallback: retry GET without category if device rejects category on GET)
+    try:
+        pan_obj.xapi.export(category=exportType, extra_qs=f'action=get&job-id={job_id}')
+    except PanDeviceXapiError as exc:
+        detail_text = getattr(exc, "status_detail", "") or str(exc)
+        if ("illegal value for parameter" in detail_text.lower()) and ("category" in detail_text.lower()):
+            logger.info(
+                f"Server rejected category '{exportType}' on GET for job {job_id}; retrying GET without category parameter."
+            )
+            try:
+                pan_obj.xapi.export(extra_qs=f'action=get&job-id={job_id}')
+            except Exception as exc2:
+                logger.exception(f"Failed fallback download (without category) for job {job_id} on {hostname}")
+                return False, job_id, "", str(exc2)
+        else:
+            logger.exception(f"Failed to download export for job {job_id} on {hostname}")
+            return False, job_id, "", str(exc)
+    except Exception as exc:
+        logger.exception(f"Failed to download export for job {job_id} on {hostname}")
+        return False, job_id, "", str(exc)
+
+    timestamp_token = finished_time_utc.strftime('%Y-%m-%d-%H_UTC')
+    safe_category = exportType.replace('-', '_')
+    file_basename = f"{file_prefix}{safe_category}_{hostname}_{timestamp_token}.tgz"
+    output_dir_final = output_dir or '.'
+    os.makedirs(output_dir_final, exist_ok=True)
+    saved_path = os.path.join(output_dir_final, file_basename)
+    with open(saved_path, 'wb') as file_descriptor:
+        file_descriptor.write(pan_obj.xapi.export_result['content'])
+    logger.info(f"Wrote export file to {saved_path}")
+    return True, job_id, saved_path, ""
 
 def firewall_SystemState(fw_obj: panos.firewall.Firewall):
     logger.info(f"\tParsing 'show system state'")
@@ -421,7 +587,9 @@ def either_LicenseInfo(object: Union[panos.firewall.Firewall, panos.panorama.Pan
 
 def firewall_ResourceMonitorHistory(fw_obj: panos.firewall.Firewall) -> Dict[str, dict]:
     logger.info("\t> Gathering resource monitor history...")
-    xmlData = panCore.xmlToLXML(fw_obj.op('show running resource-monitor hour'))
+    xmlData = panCore.xmlToLXML(fw_obj.op(
+        cmd='<show><running><resource-monitor><hour></hour></resource-monitor></running></show>',
+        cmd_xml=False))
     resourceMonitorHistory = {
         'cpuAverage': {},
         'cpuMaximum': {},
@@ -1062,3 +1230,38 @@ def postProcessing_deviceLogOutputs(firewallDetails: dict) -> Dict[str, Any]:
                         'firewalls': [fwNameSerial],
                     }
     return logOutputsByType
+
+
+def firewall_CheckForActiveExecJob(fw_obj: panos.firewall.Firewall) -> Tuple[bool, List[str]]:
+    """
+    Determine if there are any active (non-finished) Exec jobs on the firewall.
+
+    Returns a tuple: (has_active, job_ids)
+    - has_active: True if one or more Exec jobs exist with status not equal to 'FIN'.
+    - job_ids: List of active Exec job ID strings (may be empty when has_active is False).
+
+    Note: Do not construct or return display messages here; callers handle messaging.
+    """
+    try:
+        active_job_ids: List[str] = []
+        # Check processed jobs — active jobs can appear here with status like 'ACT' or 'PEND'.
+        xmlData = panCore.xmlToLXML(fw_obj.op('show jobs all'))
+        jobs = xmlData.xpath('//result/job')
+        for job in jobs:
+            job_type = (job.xpath('./type')[0].text or '').strip().lower() if job.xpath('./type') else 'jobTypeError'
+            job_status = (job.xpath('./status')[0].text or '').strip().upper() if job.xpath('./status') else 'jobStatusError'
+            #logger.info(f"\t\t\tJob {job_type} {job_status}: {job.xpath('./id')[0].text}")
+            if job_type == 'exec':
+                print(f"{job_type} {job_status}: {job.xpath('./id')[0].text}")
+            if job_type == 'exec' and job_status != 'FIN':
+                job_id_text = (job.xpath('./id')[0].text or '').strip() if job.xpath('./id') else ''
+                if job_id_text:
+                    active_job_ids.append(job_id_text)
+        has_active = len(active_job_ids) > 0
+        return has_active, active_job_ids
+    except Exception as e:
+        logger.exception(f"Error while checking active Exec jobs for {getattr(fw_obj, 'serial', 'unknown-serial')}")
+        logger.exception(e)
+        return False, []
+
+

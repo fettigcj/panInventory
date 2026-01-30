@@ -69,6 +69,54 @@ parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be g
 args, _ = parser.parse_known_args()
 logger = panCore.startLogging(args.logfile)
 
+# Emit environment diagnostics early to help troubleshoot differences between interactive and scheduled runs
+try:
+    import platform, os
+    import pan as panpython  # pan-python (xapi) package; may not always be present
+except Exception:
+    platform = None
+    panpython = None
+
+try:
+    panos_version = getattr(panos, '__version__', 'unknown')
+except Exception:
+    panos_version = 'unknown'
+
+try:
+    panpython_version = getattr(panpython, '__version__', 'unavailable') if panpython else 'unavailable'
+except Exception:
+    panpython_version = 'unavailable'
+
+try:
+    python_executable = sys.executable
+    python_version = sys.version.replace('\n', ' ')
+    is_venv = (hasattr(sys, 'real_prefix') or (getattr(sys, 'base_prefix', sys.prefix) != sys.prefix))
+    venv_prefix = sys.prefix
+    base_prefix = getattr(sys, 'base_prefix', sys.prefix)
+    cwd = os.getcwd()
+    env_user = os.getenv('USER') or os.getenv('USERNAME') or 'unknown-user'
+except Exception:
+    python_executable = 'unknown'
+    python_version = 'unknown'
+    is_venv = False
+    venv_prefix = 'unknown'
+    base_prefix = 'unknown'
+    cwd = 'unknown'
+    env_user = 'unknown-user'
+
+logger.info("Environment diagnostics: starting panInventory")
+logger.info(f" Python executable: {python_executable}")
+logger.info(f" Python version: {python_version}")
+logger.info(f" Running inside virtualenv: {is_venv} (sys.prefix={venv_prefix}, base_prefix={base_prefix})")
+if platform:
+    try:
+        logger.info(f" Platform: {platform.platform()} | Machine: {platform.machine()} | Processor: {platform.processor()}")
+    except Exception:
+        pass
+logger.info(f" Working directory: {cwd} | User: {env_user}")
+logger.info(f" pan-os-python (panos) version: {panos_version}")
+logger.info(f" pan-python (xapi) version: {panpython_version}")
+
 # Import child modules only after logging is instantiated, so the log output is captured to the parent logger.
 from pancore import panWorkbookFunctions, panGatherFunctions
 
