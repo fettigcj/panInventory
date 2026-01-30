@@ -29,6 +29,12 @@ Goals:
  -  Incorporate 'source_obj' as well as 'confPath' for each function. Finish splitting main() from other functions and create
     two calling 'utility' files so fw_obj or pano_obj can be processed depending on use case.
  -  Color code URL objects in URL filtering profile report for 'predefined' vs 'custom' URL object.
+ -  add new PAN-OS 11 features:
+    - cloud-inline-analysis
+    - disable-override
+    - inline-exception-edl-url
+    - inline-exception-ip-address
+    - mica-engine-vulnerability-enabled
 
 """
 

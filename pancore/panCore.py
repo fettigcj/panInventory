@@ -631,38 +631,3 @@ def buildFirewall_obj(panAddress, panUser='optional', panPass='optional', panKey
     elif panUser != 'optional':
         fwDirect_obj = panos.firewall.Firewall(panAddress, panUser, panPass)
 
-
-def getTSF(pan_obj, prefix=''):
-    # using 'pan_obj' nomenclature as this function should be viable for fw_ or pano_ objects.
-    sysInfo = pan_obj.show_system_info()
-    hostname = sysInfo['system']['hostname']
-    startTime = datetime.datetime.now(datetime.timezone.utc)
-    logging.info(f"Requesting tech support job for {hostname} at {startTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
-    resp = xmlToLXML(pan_obj.xapi.export(category='tech-support'))
-    job = resp.find('.//job').text
-    time.sleep(30)
-    resp = xmlToLXML(pan_obj.xapi.export(category='tech-support', extra_qs=f'action=status&job-id={job}'))
-    jobState = resp.find('.//status').text
-    waitCount = 1
-    jobTime = datetime.datetime.now(datetime.timezone.utc)
-    logging.info("    Tech support job for {0} scheduled in job {1} at {2}".format(hostname, job, jobTime.strftime("%Y/%m/%d, %H:%M:%S - %Z")))
-    time.sleep(600)
-    while jobState == 'ACT':
-        resp = xmlToLXML(pan_obj.xapi.export(category='tech-support', extra_qs=f'action=status&job-id={job}'))
-        jobState = resp.find('.//status').text
-        jobProgress = resp.find('.//progress').text
-        logging.info(f"    > Job {job} for {hostname} not done after wait #{waitCount}. Current Progress: {jobProgress} Waiting another 3 minutes.")
-        time.sleep(180)
-        waitCount += 1
-    finTime = datetime.datetime.now(datetime.timezone.utc)
-    logging.info(f"Job {job} for {hostname} is no longer active at {finTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
-    if jobState != "FIN":
-        logging.error("Job state did not return 'FIN' Something to figure out. Writing raw XML response to file. jobState returned: {0}".format(jobState))
-        with open(f"tsGeneratorError_{hostname}.XML", 'wb') as fd:
-            fd.write(ET.tostring(resp, pretty_print=True,encoding='utf-8',xml_declaration=True))
-            logging.error(f"Wrote tsGeneratorError_{hostname}.XML. Please consult error file for exact problem that prevented TSF generation.")
-    else:
-        pan_obj.xapi.export(category='tech-support', extra_qs=f'action=get&job-id={job}')
-        with open(f"{prefix}tsDump_{hostname}_{finTime.strftime('%Y-%m-%d-%H_%Z')}.tgz", "wb") as fd:
-            fd.write(pan_obj.xapi.export_result['content'])
-            logging.info(f"Wrote TS file, finished with {hostname}.")
