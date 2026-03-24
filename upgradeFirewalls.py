@@ -44,10 +44,10 @@ parser.add_argument('-F', '--mailFrom', help='SMTP source address')
 parser.add_argument('-T', '--mailTo', help='SMTP destination address')
 parser.add_argument('-M', '--Mailserver', help='SMTP server address')
 parser.add_argument('-f','--filename', help='file containing line break separated serial number list to limit scope.')
-args = parser.parse_known_args()
+args, _ = parser.parse_known_args()
 
-panCore.startLogging(args[0].logfile)
-panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
+panCore.startLogging(args.logfile)
+panCore.configStart(headless=args.headless, configStorage=args.conffile)
 if hasattr(panCore, 'panUser'):
     pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
 elif hasattr(panCore, 'panKey'):
@@ -58,10 +58,10 @@ else:
 
 # If a filename was specified override the 'firewalls' list retrieved from panorama
 # with the explicit serial numbers in the file
-if args[0].filename:
-    panCore.logging.info(f"Filename set to {args[0].filename}. Attempting to retrieve firewall list from text file")
+if args.filename:
+    panCore.logging.info(f"Filename set to {args.filename}. Attempting to retrieve firewall list from text file")
     firewalls = []
-    with open(args[0].filename) as file:
+    with open(args.filename) as file:
         for line in file:
             firewalls.append(line.rstrip())
     panCore.logging.info(f"Serial numbers retrieved from list: {firewalls}")
@@ -82,10 +82,10 @@ def sendmail(fileName, fwName, reason, sessionCountInRange):
             msg['Subject'] = f"{fwName} Cleanly upgraded ({reason})"
         else:
             msg['Subject'] = f"{fwName} Upgraded ({reason}) POST UPGRADE SESSION COUNT OUT OF RANGE"
-    msg['From'] = args[0].mailFrom
-    msg['To'] = args[0].mailTo
+    msg['From'] = args.mailFrom
+    msg['To'] = args.mailTo
     msg['Content-Type'] = 'text/html'
-    sender = smtplib.SMTP(args[0].Mailserver)
+    sender = smtplib.SMTP(args.Mailserver)
     sender.send_message(msg)
     sender.quit()
 
@@ -141,7 +141,7 @@ def checkUpgradabilityPassive():
     return True, "ReadyToUpgrade"
 
 def checkUpgradabilityStandalone():
-    if not args[0].upgradeStandalone:
+    if not args.upgradeStandalone:
         panCore.logging.info(f"   > {fwName} can't be auto-upgraded as it doesn't appear to be in an HA pair.\r\n"
                              f"   > It's running {startingVersion}. To force upgrade re-run with 'upgradeStandalone = True'")
         return False, "UpgradeStandaloneNotSet"
@@ -155,7 +155,7 @@ def checkUpgradabilityStandalone():
 
 def checkUpgradabilityActive():
     #global major, minor, maint, hotfix
-    if args[0].upgradeActive == False:
+    if args.upgradeActive == False:
         panCore.logging.info(f"    > {fwName} is Active, and script was called with 'upgradeActive = False'.\r\n)"
                              f"    > To force ugprade of active nodes set 'upgradeActive' to 'True'.")
         return False, "Upgrade Active Not Set"
@@ -190,7 +190,7 @@ def checkUpgradabilityActive():
     ):
         panCore.logging.warning(f"    > {fwName} is active, but its peer's PAN-OS version not greater than its own. Skipping upgrade until peer is upgraded.")
         return False, "Pending Passive Upgrade"
-    if not args[0].enableUpgrade:
+    if not args.enableUpgrade:
         panCore.logging.info(f"    > {fwName} is active, and script was called with 'upgradeActive == True' and Passive PAN-OS version is greater than its own. However 'enableUpgrade' flag is NOT set. Standing down...")
         return False, "Reporting Only"
     panCore.logging.info(f"    > {fwName} is active, but script was called with 'upgradeActive == True' and Passive PAN-OS version is greater than its own. Proceeding to suspend Active firewall and ugprade. ")
@@ -211,11 +211,11 @@ def checkUpgradabilityActive():
         return True, "ReadyToUpgrade"
 
 def upgradeFirewall():
-    if not args[0].enableUpgrade:
+    if not args.enableUpgrade:
         panCore.logging.info(f"    > Upgrade function called, but 'reportOnly' mode is active as 'enableUpgrade' flag is not set. Skipping actual upgrade.")
         return
     try:
-        fw_obj.software.upgrade_to_version(args[0].targetVersion)
+        fw_obj.software.upgrade_to_version(args.targetVersion)
     except Exception as exceptionDetails:
         panCore.logging.info(f"    > Started upgrade for {fwName} ({fwSerial})...")
         panCore.logging.info(f"    > Exception details: {exceptionDetails}")
@@ -262,10 +262,10 @@ def upgradeChecker():
             (major == targetMajor and minor == targetMinor and maint > targetMaint) or
             (major == targetMajor and minor == targetMinor and maint == targetMaint and hotfix >= targetHotfix)
     ):
-        panCore.logging.info(f"    > {fwName} ({fwSerial}) already running PAN-OS {startingVersion} which is >= target PAN-OS {args[0].targetVersion}. Skipping")
+        panCore.logging.info(f"    > {fwName} ({fwSerial}) already running PAN-OS {startingVersion} which is >= target PAN-OS {args.targetVersion}. Skipping")
         return False, "alreadyUpgraded"
     else:
-        panCore.logging.info(f"    > {startingVersion} seems to be less than {args[0].targetVersion}. Checking if we can upgrade.")
+        panCore.logging.info(f"    > {startingVersion} seems to be less than {args.targetVersion}. Checking if we can upgrade.")
     if haState is None:
         panCore.logging.error(f"    > {fwName} ({fwSerial}) failed to return valid HA state. Skipping.)")
         reason = 'Invalid HA'
@@ -337,7 +337,7 @@ def getPanoInventory():
 
 
 fwCount = len(firewalls)
-targetMajor, targetMinor, targetMaint = args[0].targetVersion.split('.')
+targetMajor, targetMinor, targetMaint = args.targetVersion.split('.')
 if '-h' in targetMaint:
     targetMaint, targetHotfix = targetMaint.split('-h')
 else:
@@ -389,12 +389,12 @@ for firewall in firewalls:
         endingVersion = startingVersion
     else:
         panCore.logging.info(f"\t>{fwName} marked upgradeable by upgradeChecker(). Checking if upgrades are enabled.")
-        if args[0].enableUpgrade:
+        if args.enableUpgrade:
             backupTaken = takeBackup()
             if backupTaken:
                 upgradeCounter = 1
                 doneUpgrading = False
-                while doneUpgrading == False and upgradeCounter <= args[0].maxUpgrades:
+                while doneUpgrading == False and upgradeCounter <= args.maxUpgrades:
                     preUpgradesessionCount = getSessionCount(fw_obj)
                     panCore.logging.info(f"\t> Pre-upgrade ({upgradeCounter}) session count for {fwName}: {preUpgradesessionCount}")
                     upgradeFirewall()
@@ -412,7 +412,7 @@ for firewall in firewalls:
                     fw_obj.refresh_system_info()
                     endingVersion = fw_obj.version.split('.')
                     panCore.logging.info(f"\t {fwName} ({fwSerial}) upgrade {upgradeCounter} Done. Running {endingVersion} now. Was running {startingVersion} ({fwNum}/{fwCount}) Finished at: {upgradeTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
-                    if endingVersion == args[0].targetVersion.split('.'):
+                    if endingVersion == args.targetVersion.split('.'):
                         doneUpgrading = True
                     upgradeCounter += 1
                 else:
@@ -432,11 +432,11 @@ for firewall in firewalls:
         #**({'endingVersion': endingVersion} if 'endingVersion' in locals() else {}),
         'endingVersion': endingVersion
     }
-    if args[0].mailEnable:
+    if args.mailEnable:
         sendmail(f"{fwName}.log", fwName, reason, sessionCountInRange)
 
 headers = ['serial', 'hostname', 'haState', 'upgradeable', 'details', 'startingVersion', 'endingVersion']
-workbook_obj = xlsxwriter.Workbook(args[0].workbookname)
+workbook_obj = xlsxwriter.Workbook(args.workbookname)
 worksheet = workbook_obj.add_worksheet('Firewalls')
 worksheet.write_row('A1', headers, workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
 row = 1

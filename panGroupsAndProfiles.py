@@ -37,13 +37,27 @@ Goals:
     - mica-engine-vulnerability-enabled
 
 """
+import panos
 
 #Import custom library modules
-from pancore import panCore, panExcelStyles
+from pancore import panCore, panExcelStyles, panGatherFunctions
 #Import stock/public library modules
 import sys, datetime, xlsxwriter, argparse
 
+
+def buildAll(confPath):
+    devData = {}
+    devData.update({'SecurityProfileGroups': panGatherFunctions.panorama_ProfileGroups(pano_obj, confPath)})
+    devData.update({'AntiVirusProfiles': panGatherFunctions.panorama_AntiVirusProfiles(pano_obj, confPath)})
+    devData.update({'VulnerabilityProfiles': panGatherFunctions.panorama_VulnerabilityProfiles(pano_obj, confPath)})
+    devData.update({'AntiSpywareProfiles': panGatherFunctions.panorama_AntiSpywareProfiles(pano_obj, confPath)})
+    devData.update({'urlCategories': panGatherFunctions.panorama_CustomUrlCategories(pano_obj, confPath)})
+    devData.update({'fileBlockingProfiles': panGatherFunctions.panorama_FileBlockingProfiles(pano_obj, confPath)})
+    devData.update({'wildfireProfiles': panGatherFunctions.panorama_WildfireProfiles(pano_obj, confPath)})
+    return devData
+
 if __name__ == "__main__":
+    # Initialize CLI, logging, config, and Panorama connection
     parser = argparse.ArgumentParser(
         prog="PanSecurityGroupsAndProfiles",
         description="Audit Panorama report back on security profiles and security profile groups.")
@@ -51,10 +65,10 @@ if __name__ == "__main__":
     parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='groupsAndProfiles.log')
     parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
     parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='SecurityProfilesAndGroups.xlsx')
-    args = parser.parse_known_args()
-    #
-    panCore.startLogging(args[0].logfile)
-    panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
+    parser.add_argument('--urlSource', dest='urlSource', choices=['panw', 'brightcloud'], default='panw', help="Select predefined URL category source: 'panw' or 'brightcloud'. Default: panw")
+    args, _ = parser.parse_known_args()
+    panCore.startLogging(args.logfile)
+    panCore.configStart(headless=args.headless, configStorage=args.conffile)
     if hasattr(panCore, 'panUser'):
         pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
     elif hasattr(panCore, 'panKey'):
@@ -63,550 +77,50 @@ if __name__ == "__main__":
         panCore.logging.critical("Found neither username/password nor API key. Exiting.")
         sys.exit()
 
-def getGroups(confPath):
-    panCore.logging.info("    Profile Groups.")
-    xmlData = panCore.xmlToLXML(pano_obj.xapi.get(f"{confPath}/profile-group"))
-    devData = {}
-    groups = xmlData.xpath('//response/result/profile-group')
-    if len(groups):
-        for group in groups[0].getchildren():
-            groupname = group.get('name')
-            devData[groupname] = {"GroupName": groupname}
-            for child in group.getchildren():
-                devData[groupname].update({child.tag: child.getchildren()[0].text})
-        return devData
-    else:
-        return False
-
-
-def getAntivirusProfiles(confPath):
-    xmlData = panCore.xmlToLXML(pano_obj.xapi.get(f"{confPath}/profiles/virus"))
-    devData = {}
-    avProfiles = xmlData.xpath('//response/result/virus/entry')
-    if len(avProfiles):
-        for avProfile in avProfiles:
-            profileName = avProfile.get('name')
-            devData[profileName] = {}
-            for decoder in avProfile.xpath('./decoder/entry'):
-                decoderName = decoder.get('name')
-                devData[profileName][decoderName] = {}
-                for action in decoder.getchildren():
-                    devData[profileName][decoderName].update({action.tag: action.text})
-        return devData
-    else:
-        return False
-
-
-def getVulnerabilityProfiles(confPath):
-    panCore.logging.info("    Vulnerability Protection profiles.")
-    xmlData = panCore.xmlToLXML(pano_obj.xapi.get(f"{confPath}/profiles/vulnerability"))
-    devData = {}
-    vulnerabilityProfiles = xmlData.xpath('//response/result/vulnerability/entry')
-    if len(vulnerabilityProfiles):
-        for vulnerabilityProfile in vulnerabilityProfiles:
-            profileName = vulnerabilityProfile.get('name')
-            devData[profileName] = {}
-            if (vulnerabilityProfile.xpath('./description') == []):
-                devData[profileName].update({'Description': ""})
-            else:
-                devData[profileName].update({'Description': vulnerabilityProfile.xpath('./description')[0].text})
-            devData[profileName]['rules'] = {}
-            for rule in vulnerabilityProfile.xpath('./rules/entry'):
-                ruleName = rule.get('name')
-                ruleAction = rule.xpath('./action')[0][0].tag
-                devData[profileName]['rules'][ruleName] = {'name': ruleName, 'packet-capture': 'Default (Disabled)'}
-                for element in rule.getchildren():
-                    if (not (len(element))):
-                        devData[profileName]['rules'][ruleName].update({element.tag: element.text})
-                    else:
-                        string = ""
-                        i = 1
-                        for child in element:
-                            if child.text == '\n              ':
-                                child.text = None
-                            try:
-                                string += child.text
-                            except:
-                                string += child.tag
-                            if i < len(element):
-                                string += ", "
-                                i += 1
-                        devData[profileName]['rules'][ruleName].update({element.tag: string})
-            devData[profileName]['exceptions'] = {1: 'None'}
-            exceptionNumber = 0
-            for exception in vulnerabilityProfile.xpath('./threat-exception/entry'):
-                exceptionNumber += 1
-                exceptionID = exception.get('name')
-                devData[profileName]['exceptions'][exceptionNumber] = {'ThreatID': exceptionID}
-                for element in exception.getchildren():
-                    if (not (len(element))):
-                        devData[profileName]['exceptions'][exceptionNumber].update({element.tag: element.text})
-                    else:
-                        string = ""
-                        i = 1
-                        for child in element:
-                            if (child.text == '\n            ') or (child.text == '\n              '):
-                                child.text = None
-                            try:
-                                string += child.text
-                            except:
-                                if (child.tag == 'entry'):
-                                    try:
-                                        string += child.get('name')
-                                    except:
-                                        string += child.tag
-                                else:
-                                    string += child.tag
-                            if i < len(element):
-                                string += ", "
-                                i += 1
-                        devData[profileName]['exceptions'][exceptionNumber].update({element.tag: string})
-        return devData
-    else:
-        return False
-
-
-def getAntiSpywareProfiles(confPath):
-    panCore.logging.info("    Anti-Spyware profiles.")
-    xmlData = panCore.xmlToLXML(pano_obj.xapi.get(f"{confPath}/profiles/spyware"))
-    devData = {}
-    asProfiles = xmlData.xpath('//response/result/spyware/entry')
-    if len(asProfiles):
-        for asProfile in asProfiles:
-            profileName = asProfile.get('name')
-            devData[profileName] = {'Name': profileName}
-            if (asProfile.xpath('./description') == []):
-                devData[profileName].update({'Description': ""})
-            else:
-                devData[profileName].update({'Description': asProfile.xpath('./description')[0].text})
-            devData[profileName]['rules'] = {}
-            for rule in asProfile.xpath('./rules/entry'):
-                ruleName = rule.get('name')
-                devData[profileName]['rules'][ruleName] = {'name': ruleName}
-                for element in rule.getchildren():
-                    if (not (len(element))):
-                        devData[profileName]['rules'][ruleName].update({element.tag: element.text})
-                    else:
-                        string = ""
-                        i = 1
-                        for child in element:
-                            if (child.text == '\n            ') or (child.text == '\n              '):
-                                child.text = None
-                            try:
-                                string += child.text
-                            except:
-                                string += child.tag
-                            if i < len(element):
-                                string += ", "
-                                i += 1
-                        devData[profileName]['rules'][ruleName].update({element.tag: string})
-            dnsSettings = asProfile.xpath('./botnet-domains')[0]
-            devData[profileName]['dnsSettings'] = {}
-            if (dnsSettings.xpath('./packet-capture')):
-                devData[profileName]['dnsSettings'].update(
-                    {'packetCapture': dnsSettings.xpath('./packet-capture')[0].text})
-            else:
-                devData[profileName]['dnsSettings'].update({'packetCapture': 'disable'})
-            if (dnsSettings.xpath('./sinkhole/ipv4-address')):
-                devData[profileName]['dnsSettings'].update(
-                    {'ipv4Sinkhole': dnsSettings.xpath('./sinkhole/ipv4-address')[0].text})
-            else:
-                devData[profileName]['dnsSettings'].update({'ipv4Sinkhole': 'disable'})
-            if (dnsSettings.xpath('./sinkhole/ipv6-address')):
-                devData[profileName]['dnsSettings'].update(
-                    {'ipv6Sinkhole': dnsSettings.xpath('./sinkhole/ipv6-address')[0].text})
-            else:
-                devData[profileName]['dnsSettings'].update({'ipv6Sinkhole': 'disable'})
-            devData[profileName]['dnsSettings']['lists'] = {}
-            for dnsList in asProfile.xpath('./botnet-domains/lists/entry'):
-                devData[profileName]['dnsSettings']['lists'][dnsList.get('name')] = {}
-                devData[profileName]['dnsSettings']['lists'][dnsList.get('name')].update({'name': dnsList.get('name')})
-                devData[profileName]['dnsSettings']['lists'][dnsList.get('name')].update(
-                    {'action': dnsList.xpath('./action')[0][0].tag})
-            devData[profileName]['dnsSettings']['exceptions'] = {1: 'None'}
-            i = 1
-            for dnsException in asProfile.xpath('./botnet-domains/threat-exception/entry'):
-                devData[profileName]['dnsSettings']['exceptions'].update({i: dnsException.get('name')})
-                i += 1
-            devData[profileName]['exceptions'] = {1: 'None'}
-            exceptionNumber = 0
-            for exception in asProfile.xpath('./threat-exception/entry'):
-                exceptionNumber += 1
-                exceptionID = exception.get('name')
-                devData[profileName]['exceptions'][exceptionNumber] = {'ThreatID': exceptionID}
-                for element in exception.getchildren():
-                    if (not (len(element))):
-                        devData[profileName]['exceptions'][exceptionNumber].update({element.tag: element.text})
-                    else:
-                        string = ""
-                        i = 1
-                        for child in element:
-                            if (child.text == '\n            ') or (child.text == '\n              '):
-                                child.text = None
-                            try:
-                                string += child.text
-                            except:
-                                if (child.tag == 'entry'):
-                                    try:
-                                        string += child.get('name')
-                                    except:
-                                        string += child.tag
-                                else:
-                                    string += child.tag
-                            if i < len(element):
-                                string += ", "
-                                i += 1
-                        devData[profileName]['exceptions'][exceptionNumber].update({element.tag: string})
-        return devData
-    else:
-        return False
-
-
-def getPredefinedurlCategories(confPath):
-    panCore.logging.info("    Predefined URL objects.")
-    xmlData = panCore.xmlToLXML(pano_obj.xapi.get(f"/config/predefined/{confPath}"))
-    devData = []
-    categories = xmlData.xpath(f"//response/result/{confPath}/entry")
-    for category in categories:
-        categoryName = category.get('name')
-        if categoryName not in devData:
-            devData.append(categoryName)
-    return devData
-
-
-def geturlCategories(confPath):
-    panCore.logging.info("    Custom URL objects.")
-    xmlData = panCore.xmlToLXML(pano_obj.xapi.get(f"{confPath}/profiles/custom-url-category"))
-    devData = []
-    categories = xmlData.xpath('//response/result/custom-url-category/entry')
-    if len(categories):
-        for category in categories:
-            categoryName = category.get('name')
-            if categoryName not in devData:
-                devData.append(categoryName)
-        return devData
-    else:
-        return False
-
-
-def getURLProfiles(confPath, customCategories):
-    panCore.logging.info("    URL profiles.")
-    xmlData = panCore.xmlToLXML(pano_obj.xapi.get(f"{confPath}/profiles/url-filtering"))
-    devData = {}
-    urlProfiles = xmlData.xpath('//response/result/url-filtering/entry')
-    if len(urlProfiles):
-        for urlProfile in urlProfiles:
-            profileName = urlProfile.get('name')
-            devData[profileName] = {
-                'name': '',
-                'description': '',
-                'customBlockAction': '',
-                'lists': {
-                    'allow': {1: 'None'},
-                    'alert': {1: 'None'},
-                    'block': {1: 'None'},
-                    'continue': {1: 'None'},
-                    'override': {1: 'None'},
-                    'ignore': customCategories[:],
-                    'customAllowList': {1: 'None'},
-                    'customBlockList': {1: 'None'},
-                    'customObjects': customCategories[:]
-                },
-                'settings': {
-                    'logContainerPageOnly': 'Default (True)',
-                    'safeSearchEnforce': 'Default (False)',
-                    'headerLogging_UserAgent': 'Default',
-                    'headerLogging_Referer': 'Default',
-                    'headerLogging_XFF': 'Default'
-                },
-                'credentialEnforcement': {
-                    'mode': 'Default',
-                    'logSeverity': 'Default/Disabled',
-                    'lists': {
-                        'allow': {1: 'None/Disabled'},
-                        'alert': {1: 'None/Disabled'},
-                        'block': {1: 'None/Disabled'},
-                        'continue': {1: 'None/Disabled'}
-                    }
-                },
-                'httpHeaderInsertion': {
-                    1: {
-                        'name': 'NotConfigured'
-                    }
-                }
-            }
-            devData[profileName]['name'] = profileName
-            try:
-                devData[profileName]['customBlockAction'] = urlProfile.xpath('./action')[0].text
-            except:
-                devData[profileName]['customBlockAction'] = "notFound"
-            assignedCategories = []
-            if (urlProfile.xpath('./description')):  # Check if a description exists.
-                devData[profileName].update({'description': urlProfile.xpath('./description')[0].text})
-            if (urlProfile.xpath('./allow-list')):  # Check that the custom allow list isn't empty before trying to retrieve it
-                i = 1
-                for item in urlProfile.xpath('./allow-list')[0].getchildren():
-                    devData[profileName]['lists']['customAllowList'].update({i: item.text})
-                    i += 1
-            if (urlProfile.xpath(
-                    './block-list')):  # Check that the custom block list isn't empty before trying to retrieve it
-                i = 1
-                for item in urlProfile.xpath('./block-list')[0].getchildren():
-                    devData[profileName]['lists']['customBlockList'].update({i: item.text})
-                    i += 1
-            if (urlProfile.xpath('./allow')):  # Check if any custom objects have been explicitly allowed (Predefined categories aren't explicitly allowed but rather implicitly allowed by virtue of not existing elsewhere.)
-                i = 1
-                for item in urlProfile.xpath('./allow')[0].getchildren():
-                    devData[profileName]['lists']['allow'].update({i: item.text})
-                    if item.text not in assignedCategories:
-                        assignedCategories.append(item.text)
-                    if item.text in devData[profileName]['lists']['ignore']:
-                        devData[profileName]['lists']['ignore'].remove(item.text)
-                    i += 1
-            if (urlProfile.xpath('./alert')):  # check that there are some categories set to 'alert'
-                i = 1
-                for item in urlProfile.xpath('./alert')[0].getchildren():
-                    devData[profileName]['lists']['alert'].update({i: item.text})
-                    if item.text not in assignedCategories:
-                        assignedCategories.append(item.text)
-                    if item.text in devData[profileName]['lists']['ignore']:
-                        devData[profileName]['lists']['ignore'].remove(item.text)
-                    i += 1
-            if (urlProfile.xpath('./block')):  # check that there are some categories set to 'block'
-                i = 1
-                for item in urlProfile.xpath('./block')[0].getchildren():
-                    devData[profileName]['lists']['block'].update({i: item.text})
-                    if item.text not in assignedCategories:
-                        assignedCategories.append(item.text)
-                    if item.text in devData[profileName]['lists']['ignore']:
-                        devData[profileName]['lists']['ignore'].remove(item.text)
-                    i += 1
-            if (urlProfile.xpath('./continue')):  # check that there are some categories set to 'continue'
-                i = 1
-                for item in urlProfile.xpath('./continue')[0].getchildren():
-                    devData[profileName]['lists']['continue'].update({i: item.text})
-                    if item.text not in assignedCategories:
-                        assignedCategories.append(item.text)
-                    if item.text in devData[profileName]['lists']['ignore']:
-                        devData[profileName]['lists']['ignore'].remove(item.text)
-                    i += 1
-            if (urlProfile.xpath('./override')):  # check that there are some categories set to 'override'
-                i = 1
-                for item in urlProfile.xpath('./override')[0].getchildren():
-                    devData[profileName]['lists']['override'].update({i: item.text})
-                    if item.text not in assignedCategories:
-                        assignedCategories.append(item.text)
-                    if item.text in devData[profileName]['lists']['ignore']:
-                        devData[profileName]['lists']['ignore'].remove(item.text)
-                    i += 1
-            # Search for unhandled URL categories which will be allowed (Without being logged) if not assigned to another action
-            i = 1
-            if devData[profileName]['lists']['allow'][1] != 'None':
-                i = max(devData[profileName]['lists']['allow'].keys()) + 1
-            for category in dgData['predefined']['urlCategories']:
-                if category not in assignedCategories:
-                    devData[profileName]['lists']['allow'].update({i: category})
-                    i += 1
-            if (urlProfile.xpath('./log-http-hdr-xff')):
-                devData[profileName]['settings']['headerLogging_XFF'] = urlProfile.xpath('./log-http-hdr-xff')[0].text
-            if (urlProfile.xpath('./log-http-hdr-user-agent')):
-                devData[profileName]['settings']['headerLogging_UserAgent'] = \
-                urlProfile.xpath('./log-http-hdr-user-agent')[0].text
-            if (urlProfile.xpath('./log-http-hdr-referer')):
-                devData[profileName]['settings']['headerLogging_Referer'] = urlProfile.xpath('./log-http-hdr-referer')[
-                    0].text
-            if (urlProfile.xpath('./safe-search-enforcement')):
-                devData[profileName]['settings']['safeSearchEnforce'] = urlProfile.xpath('./safe-search-enforcement')[
-                    0].text
-            if (urlProfile.xpath('./log-container-page-only')):
-                devData[profileName]['settings']['logContainerPageOnly'] = \
-                urlProfile.xpath('./log-container-page-only')[0].text
-            if (urlProfile.xpath('./credential-enforcement')):
-                mode = urlProfile.xpath('./credential-enforcement/mode')[0][0]
-                if mode.tag == 'group-mapping':
-                    devData[profileName]['credentialEnforcement']['mode'] = mode.tag + ' (' + mode.text + ')'
-                else:
-                    devData[profileName]['credentialEnforcement']['mode'] = mode.tag
-                if not mode.tag == 'disabled':
-                    devData[profileName]['credentialEnforcement']['logSeverity'] = \
-                    urlProfile.xpath('./credential-enforcement/log-severity')[0].text
-                    if (urlProfile.xpath('./credential-enforcement/allow/member')):
-                        i = 1
-                        for member in urlProfile.xpath('./credential-enforcement/allow/member'):
-                            devData[profileName]['credentialEnforcement']['lists']['allow'][i] = member.text
-                            i += 1
-                    if (urlProfile.xpath('./credential-enforcement/alert/member')):
-                        i = 1
-                        for member in urlProfile.xpath('./credential-enforcement/alert/member'):
-                            devData[profileName]['credentialEnforcement']['lists']['alert'][i] = member.text
-                            i += 1
-                    if (urlProfile.xpath('./credential-enforcement/block/member')):
-                        i = 1
-                        for member in urlProfile.xpath('./credential-enforcement/block/member'):
-                            devData[profileName]['credentialEnforcement']['lists']['block'][i] = member.text
-                            i += 1
-                    if (urlProfile.xpath('./credential-enforcement/continue/member')):
-                        i = 1
-                        for member in urlProfile.xpath('./credential-enforcement/continue/member'):
-                            devData[profileName]['credentialEnforcement']['lists']['continue'][i] = member.text
-                            i += 1
-            if (urlProfile.xpath('./http-header-insertion')):
-                rule = 1
-                for entry in urlProfile.xpath('./http-header-insertion/entry'):
-                    devData[profileName]['httpHeaderInsertion'][rule] = {}
-                    devData[profileName]['httpHeaderInsertion'][rule]['name'] = entry.get('name')
-                    devData[profileName]['httpHeaderInsertion'][rule]['type'] = entry[0][0].get('name')
-                    devData[profileName]['httpHeaderInsertion'][rule]['domains'] = {1: "None"}
-                    i = 1
-                    for domain in entry.xpath('./type/entry/domains/member'):
-                        devData[profileName]['httpHeaderInsertion'][rule]['domains'][i] = domain.text
-                        i += 1
-                    devData[profileName]['httpHeaderInsertion'][rule]['headers'] = {1: "None"}
-                    i = 1
-                    for header in entry.xpath('./type/entry/headers/entry'):
-                        devData[profileName]['httpHeaderInsertion'][rule]['headers'][i] = {}
-                        devData[profileName]['httpHeaderInsertion'][rule]['headers'][i]['header'] = \
-                        header.xpath('./header')[0].text
-                        devData[profileName]['httpHeaderInsertion'][rule]['headers'][i]['value'] = \
-                        header.xpath('./value')[0].text
-                        devData[profileName]['httpHeaderInsertion'][rule]['headers'][i]['log'] = header.xpath('./log')[
-                            0].text
-                        i += 1
-                    rule += 1
-        return devData
-    else:
-        return False
-
-
-def getFileBlockingProfiles(confPath):
-    panCore.logging.info("    File blocking profiles.")
-    xmlData = panCore.xmlToLXML(pano_obj.xapi.get(f"{confPath}/profiles/file-blocking"))
-    devData = {}
-    fileBlockingProfiles = xmlData.xpath('//response/result/file-blocking/entry')
-    if len(fileBlockingProfiles):
-        for fileBlockingProfile in fileBlockingProfiles:
-            fileBlockingProfileName = fileBlockingProfile.get('name')
-            if fileBlockingProfile.xpath('./description'):
-                fileBlockingProfileDescription = fileBlockingProfile.xpath('./description')[0].text
-            else:
-                fileBlockingProfileDescription = ''
-            devData[fileBlockingProfileName] = {
-                'name': fileBlockingProfileName,
-                'description': fileBlockingProfileDescription,
-                'rules': {
-                    0: {
-                        'name': '',
-                        'applications': {0: ''},
-                        'fileTypes': {0: ''},
-                        'direction': '',
-                        'action': ''
-                    }
-                }
-            }
-            ruleNum = 0
-            for rule in fileBlockingProfile.xpath('./rules/entry'):
-                devData[fileBlockingProfileName]['rules'][ruleNum] = {}
-                ruleName = rule.get('name')
-                devData[fileBlockingProfileName]['rules'][ruleNum]['name'] = ruleName
-                i = 0
-                devData[fileBlockingProfileName]['rules'][ruleNum]['applications'] = {0: ''}
-                for app in rule.xpath('./application/member'):
-                    devData[fileBlockingProfileName]['rules'][ruleNum]['applications'][i] = app.text
-                    i += 1
-                i = 0
-                devData[fileBlockingProfileName]['rules'][ruleNum]['fileTypes'] = {0: ''}
-                for fileType in rule.xpath('./file-type/member'):
-                    devData[fileBlockingProfileName]['rules'][ruleNum]['fileTypes'][i] = fileType.text
-                    i += 1
-                if rule.xpath('./direction'):
-                    devData[fileBlockingProfileName]['rules'][ruleNum]['direction'] = rule.xpath('./direction')[0].text
-                if rule.xpath('./action'):
-                    devData[fileBlockingProfileName]['rules'][ruleNum]['action'] = rule.xpath('./action')[0].text
-                ruleNum += 1
-        return devData
-    else:
-        return False
-
-
-def getWildfireProfiles(confPath):
-    panCore.logging.info("    Wildfire profiles.")
-    xmlData = panCore.xmlToLXML(pano_obj.xapi.get(f"{confPath}/profiles/wildfire-analysis"))
-    devData = {}
-    wildfireProfiles = xmlData.xpath('//response/result/wildfire-analysis/entry')
-    if len(wildfireProfiles):
-        for profile in wildfireProfiles:
-            profileName = profile.get('name')
-            if profile.xpath('./description'):
-                profileDescription = profile.xpath('./description')[0].text
-            else:
-                profileDescription = ''
-            devData[profileName] = {
-                'name': profileName,
-                'description': profileDescription,
-                'rules': {}}
-            for rule in profile.xpath('./rules/entry'):
-                ruleName = rule.get('name')
-                ruleDirection = rule.xpath('./direction')[0].text
-                ruleAnalysis = rule.xpath('./analysis')[0].text
-                devData[profileName]['rules'][ruleName] = {
-                    'name': ruleName,
-                    'direction': ruleDirection,
-                    'analysis': ruleAnalysis}
-                i = 0
-                devData[profileName]['rules'][ruleName]['applications'] = {i: 'None'}
-                for app in rule.xpath('./application/member'):
-                    devData[profileName]['rules'][ruleName]['applications'].update({i: app.text})
-                    i += 1
-                i = 0
-                devData[profileName]['rules'][ruleName]['fileTypes'] = {i: 'None'}
-                for fileType in rule.xpath('./file-type/member'):
-                    devData[profileName]['rules'][ruleName]['fileTypes'].update({i: fileType.text})
-        return devData
-    else:
-        return False
-
-
-def buildAll(confPath):
-    devData = {}
-    devData.update({'SecurityProfileGroups': getGroups(confPath)})
-    devData.update({'AntiVirusProfiles': getAntivirusProfiles(confPath)})
-    devData.update({'VulnerabilityProfiles': getVulnerabilityProfiles(confPath)})
-    devData.update({'AntiSpywareProfiles': getAntiSpywareProfiles(confPath)})
-    devData.update({'urlCategories': geturlCategories(confPath)})
-    devData.update({'fileBlockingProfiles': getFileBlockingProfiles(confPath)})
-    devData.update({'wildfireProfiles': getWildfireProfiles(confPath)})
-    return devData
-
-if __name__ == "__main__":
-    # Code to run if executed as a freestanding script rather than imported:
     dgCount = len(deviceGroups)
+    dgHierarchy = panGatherFunctions.panorama_DeviceGroupHierarchy_topdown_with_firewalls(pano_obj)
     dgNum = 1
     startTime = datetime.datetime.now(datetime.timezone.utc)
-    predefinedURLsFrom = "pan-url-categories"  # Use this one if you're leveraging PANW URL categories
-    # predefinedURLsFrom = "bc-url-categories" # Use this one if you're leveraging BrightCloud URL categories
     dgData = {}
     panCore.logging.info(f"Starting audit at {startTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
     panCore.logging.info(f"  Adding predefined elements:")
     dgData['predefined'] = buildAll('/config/predefined')
-    dgData['predefined'].update({'urlCategories': getPredefinedurlCategories(predefinedURLsFrom)})
-    dgData['predefined']['urlProfiles'] = getURLProfiles('/config/predefined',[])
+    dgData['predefined'].update({'urlCategories': panGatherFunctions.panorama_PredefinedUrlCategories(pano_obj, args.urlSource)})
+    dgData['predefined']['urlProfiles'] = panGatherFunctions.panorama_UrlFilteringProfiles(
+            pano_obj,
+            '/config/predefined',
+            [],
+            dgData['predefined']['urlCategories'],
+        )
     panCore.logging.info(f"  Adding shared elements.")
     dgData['shared'] = buildAll('/config/shared')
-    dgData['shared']['urlProfiles'] = getURLProfiles('/config/shared', dgData['shared']['urlCategories'])
+    dgData['shared']['urlObjects_detailed'] = panGatherFunctions.either_CustomUrlCategories_detailed(pano_obj)
+    dgData['shared']['urlProfiles'] = panGatherFunctions.panorama_UrlFilteringProfiles(
+            pano_obj,
+            '/config/shared',
+            dgData['shared']['urlCategories'] or [],
+            dgData['predefined']['urlCategories'],
+        )
     for dg_obj in deviceGroups:
         dgAuditStartTime = datetime.datetime.now(datetime.timezone.utc)
         panCore.logging.info("*********")
         panCore.logging.info(f"Starting audit of device group {dg_obj.name} ({dgNum}/{dgCount}) at {dgAuditStartTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
         dgData[dg_obj.name] = buildAll(dg_obj.xpath())
+        dgData[dg_obj.name]['urlObjects_detailed'] = panGatherFunctions.either_CustomUrlCategories_detailed(dg_obj)
         if dgData[dg_obj.name]['urlCategories']:
             # If the device group has locally defined URL category objects incorporate them into "Custom URL categories"
-            dgData[dg_obj.name]['urlProfiles'] = getURLProfiles(dg_obj.xpath(), (dgData['shared']['urlCategories'] + dgData[dg_obj.name]['urlCategories']))
+            dgData[dg_obj.name]['urlProfiles'] = panGatherFunctions.panorama_UrlFilteringProfiles(
+                            pano_obj,
+                            dg_obj.xpath(),
+                            (dgData['shared']['urlCategories'] + dgData[dg_obj.name]['urlCategories']),
+                            dgData['predefined']['urlCategories'],
+                        )
         else:
             # else just use shared (If 'Shared' has custom URL objects.... )
             if dgData['shared']['urlCategories']:
-                dgData[dg_obj.name]['urlProfiles'] = getURLProfiles(dg_obj.xpath(), (dgData['shared']['urlCategories']))
+                dgData[dg_obj.name]['urlProfiles'] = panGatherFunctions.panorama_UrlFilteringProfiles(pano_obj, dg_obj.xpath(), (dgData['shared']['urlCategories']))
             else:
-                dgData[dg_obj.name]['urlProfiles'] = getURLProfiles(dg_obj.xpath(), [])
+                dgData[dg_obj.name]['urlProfiles'] = panGatherFunctions.panorama_UrlFilteringProfiles(pano_obj, dg_obj.xpath(), [])
         dgNum +=1
     endTime = datetime.datetime.now(datetime.timezone.utc)
     panCore.logging.info(f"Finished gathering data from Panorama at {endTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}. (In {round((((endTime - startTime).total_seconds())/60),4)} minutes)")
@@ -621,13 +135,13 @@ if __name__ == "__main__":
         if reportDG:
             deviceGroupsToReport.append(dgName)
     # Write Excel report detailing profiles discovered
-    workbook = xlsxwriter.Workbook(args[0].workbookname)
-    headers = ['deviceGroup', 'SecurityProfileGroups', 'AntiVirusProfiles', 'AntiSpywareProfiles', 'VulnerabilityProfiles', 'urlProfiles', 'fileBlockingProfiles', 'wildfireProfiles']
+    workbook = xlsxwriter.Workbook(args.workbookname)
+    headers = ['deviceGroup', 'SecurityProfileGroups', 'AntiVirusProfiles', 'AntiSpywareProfiles', 'VulnerabilityProfiles', 'urlProfiles', 'fileBlockingProfiles', 'wildfireProfiles', 'urlObjects_detailed']
     ####
     #### List all Security Profiles & Security Profile Groups in the summary tab:
     ####
     worksheet = workbook.add_worksheet(('profileList'))
-    worksheet.merge_range('A1:G1', 'Security Profiles found',workbook.add_format(panExcelStyles.styles['label']))
+    worksheet.merge_range('A1:I1', 'Security Profiles found',workbook.add_format(panExcelStyles.styles['label']))
     worksheet.write_row('A2',headers,workbook.add_format(panExcelStyles.styles['rowHeader']))
     row = 1
     col = 0
@@ -637,7 +151,7 @@ if __name__ == "__main__":
             row = dgStartRow
             col = headers.index(header)
             if header == 'deviceGroup':
-                # We don't know how many rows the device group will occupy yet.
+                # We don't know how many rows the device group will occupy yet, wait until after this loop to write the device group name to the rows we're about to write.'
                 pass
             elif header not in dgData[dgName].keys():
                 # if there are no profiles of a particular type for this device group skip that profile type.
@@ -645,11 +159,17 @@ if __name__ == "__main__":
             elif dgData[dgName][header]:
                 # if there are no profiles of a particular type for this device group skip that profile type.
                 # (This test keys off the boolean "False" returned by the get... functions earlier)
-                for profileName in dgData[dgName][header].keys():
-                    #print(f"    Writing {profileName} on row {row}")
-                    worksheet.write(row,col,profileName)
+                if header == 'urlObjects_detailed':
+                    # Don't splat every URL object, just the count will do.
+                    worksheet.write(row,col,len(dgData[dgName][header]))
                     dgEndRow = max(dgEndRow, row)
                     row += 1
+                else:
+                    for profileName in dgData[dgName][header].keys():
+                        #print(f"    Writing {profileName} on row {row}")
+                        worksheet.write(row,col,profileName)
+                        dgEndRow = max(dgEndRow, row)
+                        row += 1
         col = headers.index('deviceGroup')
         rowNums = range(dgStartRow, dgEndRow)
         for row in range(dgStartRow, dgEndRow+1):
@@ -1105,6 +625,136 @@ if __name__ == "__main__":
                 row += 1
             endRow = max(row, endRow)
             row = endRow
+    ####
+    #### Detailed URL objects
+    ####
+    worksheet = workbook.add_worksheet("Detailed URL objects")
+    # Banner per Device Group across four columns, then headers and details
+    row = 0
+    col_start = 0
+    # Build dynamic headers for this worksheet from union of keys across all URL objects.
+    for dgName in dgData.keys():
+        url_objects = dgData.get(dgName, {}).get('urlObjects_detailed')
+        if not isinstance(url_objects, dict) or len(url_objects) == 0:
+            continue
+        # Determine headers dynamically based on object records (SDK .about() keys)
+        labels_seen = []  # maintain insertion order
+        for object_name in sorted(url_objects.keys()):
+            record = url_objects.get(object_name) or {}
+            if isinstance(record, dict):
+                for label in record.keys():
+                    if label not in labels_seen:
+                        labels_seen.append(label)
+        # We always show a first column for the object name
+        # Prefer readable, stable column order: Name, then common fields if present, then any others.
+        preferred_order = ['type', 'description', 'url_value']
+        dynamic_headers = ['Name']
+        for key in preferred_order:
+            if key in labels_seen:
+                if key == 'url_value':
+                    dynamic_headers.append('Values')
+                    # Add a computed member count column immediately after Values
+                    dynamic_headers.append('memberCount')
+                elif key == 'description':
+                    dynamic_headers.append('Description')
+                elif key == 'type':
+                    dynamic_headers.append('Type')
+        # Append any remaining labels (excluding ones already mapped) in sorted order for determinism
+        remaining = [k for k in labels_seen if k not in preferred_order]
+        for key in sorted(remaining):
+            # Avoid duplicating a header named 'name' since we already include 'Name' as first column
+            if key.lower() == 'name':
+                continue
+            dynamic_headers.append(key)
+        # Device Group banner across the computed number of columns
+        last_col = col_start + max(0, len(dynamic_headers) - 1)
+        worksheet.merge_range(row, col_start, row, last_col, dgName, workbook.add_format(panExcelStyles.styles['label']))
+        row += 1
+        # Column headers
+        worksheet.write_row(row, col_start, dynamic_headers, workbook.add_format(panExcelStyles.styles['rowHeader']))
+        row += 1
+        # Helper to normalize arbitrary values for display
+        def _normalize_value(value):
+            try:
+                if value is None:
+                    return 'None'
+                # If it's a list-like or set, join items
+                if isinstance(value, (list, tuple, set)):
+                    items = [str(v) for v in value if v is not None and str(v).strip() != '']
+                    return ", ".join(items) if items else 'None'
+                # If it's a dict, join its values
+                if isinstance(value, dict):
+                    items = [str(v) for v in value.values() if v is not None and str(v).strip() != '']
+                    return ", ".join(items) if items else 'None'
+                # Strings: strip; if string representation looks like list, keep as-is for now
+                text = str(value).strip()
+                return text if text else 'None'
+            except Exception:
+                return 'None'
+        # Rows for each URL object (sorted by name for deterministic output)
+        for object_name in sorted(url_objects.keys()):
+            record = url_objects.get(object_name) or {}
+            col_offset = 0
+            # First column: object name
+            worksheet.write(row, col_start + col_offset, object_name)
+            col_offset += 1
+            # Remaining columns map back to labels
+            for header_label in dynamic_headers[1:]:
+                key = header_label
+                # Map presentation headers back to SDK keys for common fields
+                if header_label == 'Type':
+                    key = 'type'
+                elif header_label == 'Description':
+                    key = 'description'
+                elif header_label == 'Values':
+                    key = 'url_value'
+                value = record.get(key) if isinstance(record, dict) else None
+                if header_label == 'Values':
+                    # Write the raw Python list-formatted object intact (e.g., ["a", "b", "c"]).
+                    if value is None:
+                        display_text = 'None'
+                    elif isinstance(value, (list, tuple, set)):
+                        try:
+                            display_text = repr(list(value)) if len(value) > 0 else 'None'
+                        except Exception:
+                            display_text = 'None'
+                    elif isinstance(value, dict):
+                        # Not expected for url_value; fallback to Pythonic list from dict values
+                        try:
+                            vals = list(value.values())
+                            display_text = repr(vals) if len(vals) > 0 else 'None'
+                        except Exception:
+                            display_text = 'None'
+                    else:
+                        # For strings or other scalars, just cast to str and keep as-is
+                        text = str(value).strip()
+                        display_text = text if text else 'None'
+                    worksheet.write(row, col_start + col_offset, display_text)
+                elif header_label == 'memberCount':
+                    # Compute count of entries in the Values (url_value) field
+                    values_field = record.get('url_value') if isinstance(record, dict) else None
+                    try:
+                        if isinstance(values_field, (list, tuple, set)):
+                            count_value = len(values_field)
+                        elif isinstance(values_field, dict):
+                            count_value = len(values_field)
+                        elif values_field is None:
+                            count_value = 0
+                        else:
+                            # As a fallback, attempt to interpret stringified list; otherwise 0
+                            import ast
+                            parsed = ast.literal_eval(values_field) if isinstance(values_field, str) else []
+                            count_value = len(parsed) if isinstance(parsed, (list, tuple, set)) else 0
+                    except Exception:
+                        count_value = 0
+                    worksheet.write(row, col_start + col_offset, count_value)
+                else:
+                    worksheet.write(row, col_start + col_offset, _normalize_value(value))
+                col_offset += 1
+            row += 1
+        # Whitespace after each DG section
+        row += 1
+    
     ####
     #### File blocking Profile
     ####

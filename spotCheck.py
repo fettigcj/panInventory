@@ -34,5 +34,5 @@ parser.add_argument('-l', '--headless', help="Operate in headless mode, without 
 parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='spotCheck.log')
 parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='spotCheck.xlsx')
 parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
-args = parser.parse_known_args()
+args, _ = parser.parse_known_args()
 

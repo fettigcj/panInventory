@@ -4,7 +4,7 @@ setlocal enabledelayedexpansion
 :: ---------------------------------------------
 :: CONFIGURATION
 :: ---------------------------------------------
-set rotationDays=60
+set rotationDays=30
 
 :: ---------------------------------------------
 :: ARGUMENT VALIDATION
@@ -19,13 +19,16 @@ if "%~2"=="" (
 set "baseDir=%~1"
 set "envName=%~2"
 
+:: lower-case environment for log file naming to match PHP index expectations
+for /f "usebackq delims=" %%L in (`powershell -NoProfile -Command "'%envName%'.ToLower()"`) do set "envLower=%%L"
+
 :: ---------------------------------------------
 :: PATHS
 :: ---------------------------------------------
 set "confDir=%baseDir%\confs"
 set "confFile=%confDir%\%envName%.json"
 set "appPath=%baseDir%\panInventory"
-set "logPath=%baseDir%\logs"
+set "logPath=%baseDir%\output\%envName%\logs"
 set "outputDir=%baseDir%\output\%envName%"
 set "lockDir=%baseDir%\locks"
 
@@ -134,10 +137,8 @@ set "temp=%baseName%_temp.xlsx"
 call :log_msg "Attempting to archive/replace using temp file: %temp%"
 
 if exist "%current%" if exist "%temp%" (
-    for %%F in ("%current%") do set "fileDate=%%~tF"
-    set "fileDate=%fileDate:~0,10%"
-    set "fileDate=%fileDate:/=-%"
-    set "archive=%baseName%-%fileDate%.xlsx"
+    for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "(Get-Item '%current%').LastWriteTime.ToString('yy-MM-dd')"`) do set "stamp=%%D"
+    set "archive=%baseName%-%stamp%.xlsx"
     ren "%current%" "%archive%"
     ren "%temp%" "%current%"
     call :log_msg "Archived %current% -> %archive%, replaced with new report."
@@ -173,16 +174,16 @@ goto :EOF
 call :log_msg "Generating and rotating reports for environment '%envName%'..."
 call :log_msg "Using Python interpreter: %PYTHON_CMD%"
 
-call :run_python_report panInventory.py %envName%_PanInventory_temp.xlsx -s -c "%confFile%" -L "%logPath%\%envName%_inventory.log" -w "%envName%_PanInventory_temp.xlsx"
+call :run_python_report panInventory.py %envName%_PanInventory_temp.xlsx -s -c "%confFile%" -L "%logPath%\%envLower%_PanInventory.log" -w "%envName%_PanInventory_temp.xlsx"
 if exist "%envName%_PanInventory_temp.xlsx" call :archive_and_replace %envName%_PanInventory
 
-call :run_python_report panoramaSyncState.py %envName%_PanoState_temp.xlsx -c "%confFile%" -L "%logPath%\%envName%_PanoState.log" -w "%envName%_PanoState_temp.xlsx"
+call :run_python_report panoramaSyncState.py %envName%_PanoState_temp.xlsx -c "%confFile%" -L "%logPath%\%envLower%_PanoState.log" -w "%envName%_PanoState_temp.xlsx"
 if exist "%envName%_PanoState_temp.xlsx" call :archive_and_replace %envName%_PanoState
 
-call :run_python_report panGroupsAndProfiles.py %envName%_SecurityProfilesAndGroups_temp.xlsx -c "%confFile%" -L "%logPath%\%envName%_SecurityProfilesAndGroups.log" -w "%envName%_SecurityProfilesAndGroups_temp.xlsx"
+call :run_python_report panGroupsAndProfiles.py %envName%_SecurityProfilesAndGroups_temp.xlsx -c "%confFile%" -L "%logPath%\%envLower%_SecurityProfilesAndGroups.log" -w "%envName%_SecurityProfilesAndGroups_temp.xlsx"
 if exist "%envName%_SecurityProfilesAndGroups_temp.xlsx" call :archive_and_replace %envName%_SecurityProfilesAndGroups
 
-call :run_python_report panOverrides.py %envName%_overrides_temp.xlsx -c "%confFile%" -L "%logPath%\%envName%_overrides.log" -w "%envName%_overrides_temp.xlsx"
+call :run_python_report panOverrides.py %envName%_overrides_temp.xlsx -c "%confFile%" -L "%logPath%\%envLower%_overrides.log" -w "%envName%_overrides_temp.xlsx"
 if exist "%envName%_overrides_temp.xlsx" call :archive_and_replace %envName%_overrides
 
 call :log_msg "Report update process completed."

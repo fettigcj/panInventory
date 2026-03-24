@@ -31,7 +31,7 @@ parser.add_argument('-f', '--firewall', help="IP address of firewall to connect 
 parser.add_argument('-u', '--username', help="username to connect with.", default='tsaController')
 parser.add_argument('-p', '--password', help="password to connect with.", default='Change!This@Immediately1')
 
-args = parser.parse_known_args()
+args, _ = parser.parse_known_args()
 
 todayDate = datetime.date.today()
 

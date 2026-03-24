@@ -29,11 +29,11 @@ parser.add_argument('-l', '--headless', help="Operate in headless mode, without 
 parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='OverrideFinder.log')
 parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
 parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='Overrides.xlsx')
-args = parser.parse_known_args()
+args, _ = parser.parse_known_args()
 
-panCore.startLogging(args[0].logfile)
-panCore.initXLSX(args[0].workbookname)
-panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
+panCore.startLogging(args.logfile)
+panCore.initXLSX(args.workbookname)
+panCore.configStart(headless=args.headless, configStorage=args.conffile)
 
 if hasattr(panCore, 'panUser'):
     pano_obj, deviceGroups, firewalls = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
