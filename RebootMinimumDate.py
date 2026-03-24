@@ -35,10 +35,10 @@ parser.add_argument('-W', '--Wait', help="Seconds to wait before starting next b
 parser.add_argument('-d', '--disabledryrun', help="Default mode is log only. Disable 'Dry Run' to take action", default=False, action='store_true')
 parser.add_argument('-S', '--rebootStandalone', help="Default mode will not reboot Stand alone firewalls. Enable this flag to reboot them.", default=False, action='store_true')
 parser.add_argument('-D', '--targetDate', help="Target reboot date. Reboot anything that hasn't been rebooted since this date.", default='3/1/2024')
-args = parser.parse_known_args()
+args, _ = parser.parse_known_args()
 
-panCore.startLogging(args[0].logfile)
-panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
+panCore.startLogging(args.logfile)
+panCore.configStart(headless=args.headless, configStorage=args.conffile)
 if hasattr(panCore, 'panUser') and panCore.panUser is not None:
     pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
 elif hasattr(panCore, 'panKey') and panCore.panKey is not None:
@@ -73,8 +73,8 @@ snapshots_config = [
   'ip_sec_tunnels']
 
 
-startTime = datetime.datetime.now(tz=zoneinfo.ZoneInfo(args[0].timezone))
-targetDate = datetime.datetime(int(args[0].targetDate.split('/')[2]), int(args[0].targetDate.split('/')[0]), int(args[0].targetDate.split('/')[1]), tzinfo=datetime.timezone.utc)
+startTime = datetime.datetime.now(tz=zoneinfo.ZoneInfo(args.timezone))
+targetDate = datetime.datetime(int(args.targetDate.split('/')[2]), int(args.targetDate.split('/')[0]), int(args.targetDate.split('/')[1]), tzinfo=datetime.timezone.utc)
 rebootList = {}
 fwCount = len(firewalls)
 fwNum = 0
@@ -116,11 +116,11 @@ for fw_obj in firewalls:
         else:
             panCore.logging.info(f"{hostname} ({fw_obj.serial}) was last rebooted on {rebootDate} Gathering data to prepare for reboot or HA Suspension. ({fwNum}/{fwCount})")
             if haState == 'disabled':
-                if args[0].rebootStandalone:
-                    if args[0].disabledryrun:
+                if args.rebootStandalone:
+                    if args.disabledryrun:
                         fw_obj.op('request restart system')
                         rebootList[fw_obj.serial]['actionTaken'] = "Rebooted stand-alone firewall as requested."
-                        panCore.logging.info(f"\t> Rebooted {hostname} ({fw_obj.serial}) at {datetime.datetime.now(tz=zoneinfo.ZoneInfo(args[0].timezone))}")
+                        panCore.logging.info(f"\t> Rebooted {hostname} ({fw_obj.serial}) at {datetime.datetime.now(tz=zoneinfo.ZoneInfo(args.timezone))}")
                         continue
                     else:
                         rebootList[fw_obj.serial]['actionTaken'] = "[DRY RUN - 'would have'] Rebooted stand-alone firewall as requested."
@@ -131,7 +131,7 @@ for fw_obj in firewalls:
                     panCore.logging.info(f"\t> 'Skipped Reboot - Not rebooting stand-alone firewalls")
                     continue
             elif haState == 'passive':
-                if args[0].disabledryrun:
+                if args.disabledryrun:
                     if fw_obj.pending_changes():
                         xmlData = panCore.xmlToLXML(fw_obj.op('show config list changes'))
                         if len(xmlData[0]):
@@ -177,7 +177,7 @@ for fw_obj in firewalls:
                         panCore.logging.error(f"\t> Unable to check pre-session count {hostname} returned {preSessions}. {peerName} returned {peerSessions}. ({fwNum}/{fwCount})")
                         rebootList[fw_obj.serial]['actionTaken'] = f"Unable to suspend. Failed pre-session check: {hostname} returned {preSessions}. {peerName} returned {peerSessions}"
                         continue
-                    if args[0].disabledryrun:
+                    if args.disabledryrun:
                         panCore.logging.info(f"\t> {hostname} is actively running {preSessions} sessions. {peerName} shows {peerSessions}. Suspending {hostname}")
                         fw_obj.op('request high-availability state suspend')
                         time.sleep(10)
@@ -223,7 +223,7 @@ for reboot in rebootList:
         if key not in headers:
             headers.append(key)
 
-panCore.initXLSX(args[0].workbookname)
+panCore.initXLSX(args.workbookname)
 worksheet = panCore.workbook_obj.add_worksheet("rebootLog")
 worksheet.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
 

@@ -1,3 +1,4 @@
+from panos import objects
 from pancore import panCore
 import panos
 from panos.errors import PanDeviceXapiError
@@ -1265,3 +1266,776 @@ def firewall_CheckForActiveExecJob(fw_obj: panos.firewall.Firewall) -> Tuple[boo
         return False, []
 
 
+
+
+
+def gather_custom_url_categories_for_scope(container_obj: Union[panos.panorama.Panorama, panos.panorama.DeviceGroup], scope_label: str) -> Dict[str, Any]:
+    """
+    Gather Custom URL Category objects for a single scope (Shared or a specific Device Group).
+
+    - container_obj: Panorama object for Shared scope, or a DeviceGroup object for a DG scope
+    - scope_label: 'Shared' or the exact Device Group name to stamp on returned records
+
+    Returns a dict with keys:
+      - 'catalog': list of records with: scope, category_name, category_type, entries, entries_count
+      - 'index': dict keyed by (scope, category_name) -> same record
+
+    Notes:
+      - This function does not attempt to retrieve any GUID/UUID because the SDK and XML do not expose one for CustomUrlCategory.
+      - It performs a single refresh of the CustomUrlCategory store for the provided container only.
+    """
+    try:
+        panos.objects.CustomUrlCategory.refreshall(container_obj)
+    except Exception as e:
+        logger.debug(f"Unable to refresh CustomUrlCategory store for scope '{scope_label}': {e}")
+
+    try:
+        url_categories = container_obj.findall(panos.objects.CustomUrlCategory) or []
+    except Exception:
+        url_categories = []
+
+    catalog: List[Dict[str, Any]] = []
+    index: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    for url_cat_obj in url_categories:
+        category_name = getattr(url_cat_obj, 'name', '') or ''
+        category_type = getattr(url_cat_obj, 'type', '') or ''
+        entries_list = getattr(url_cat_obj, 'list', None)
+        if entries_list is None and hasattr(url_cat_obj, 'url_list'):
+            entries_list = getattr(url_cat_obj, 'url_list')
+        if entries_list is None:
+            entries_list = []
+        try:
+            entries = list(entries_list) if isinstance(entries_list, (list, tuple, set)) else []
+        except Exception:
+            entries = []
+        record = {
+            'scope': scope_label,
+            'category_name': category_name,
+            'category_type': category_type,
+            'entries': entries,
+            'entries_count': len(entries),
+        }
+        key = (scope_label, category_name)
+        catalog.append(record)
+        index[key] = record
+
+    return {'catalog': catalog, 'index': index}
+
+
+def panorama_CustomUrlCategories(panorama_obj: panos.panorama.Panorama, config_xpath: str) -> Union[List[str], bool]:
+    """XML-driven retrieval of Custom URL Category names for the given config xpath.
+    Mirrors legacy geturlCategories behavior and return shape (list of names or False).
+    """
+    logger.info("\tCustom URL objects (XML path).")
+    xml_data = panCore.xmlToLXML(panorama_obj.xapi.get(f"{config_xpath}/profiles/custom-url-category"))
+    category_names: List[str] = []
+    categories = xml_data.xpath('//response/result/custom-url-category/entry')
+    if len(categories):
+        for category in categories:
+            category_name = category.get('name')
+            if category_name and category_name not in category_names:
+                category_names.append(category_name)
+        return category_names
+    else:
+        return False
+
+def either_CustomUrlCategories_detailed(container_obj: Union[panos.panorama.Panorama, panos.panorama.DeviceGroup]) -> Union[bool, Dict[str, Dict[str, Any]]]:
+    """
+    SDK retrieval of custom URL objects.
+    """
+    logger.info("\tCustom URL objects (SDK path).")
+    try:
+        panos.objects.CustomUrlCategory.refreshall(container_obj)
+        url_categories = container_obj.findall(panos.objects.CustomUrlCategory) or []
+    except Exception:
+        url_categories = []
+    if len(url_categories):
+        urlDict = {}
+        name_not_found_counter = 1
+        for url_obj in url_categories:
+            name = getattr(url_obj, 'name', None)
+            if name:
+                urlDict[name] = url_obj.about()
+            else:
+                urlDict[f'nameNotFound-{name_not_found_counter:03d}'] = url_obj.about()
+                name_not_found_counter += 1
+        return urlDict
+    else:
+        return False
+
+
+def panorama_PredefinedUrlCategories(panorama_obj: panos.panorama.Panorama, url_source: str) -> List[str]:
+    """XML-driven retrieval of Predefined URL Category names.
+    Direct port of getPredefinedurlCategories; always returns a list of names (possibly empty).
+    :param panorama_obj: Panorama connection object to query.
+    :param url_source: logical selector for URL database source; 'panw' or 'brightcloud'.
+    """
+    logger.info("\tPredefined URL objects (XML path).")
+    source_normalized = (url_source or "").strip().lower()
+    if source_normalized == 'brightcloud':
+        predefined_xpath = 'bc-url-categories'
+    else:
+        # default to PANW when invalid or 'panw'
+        predefined_xpath = 'pan-url-categories'
+    xml_data = panCore.xmlToLXML(panorama_obj.xapi.get(f"/config/predefined/{predefined_xpath}"))
+    category_names: List[str] = []
+    categories = xml_data.xpath(f"//response/result/{predefined_xpath}/entry")
+    for category in categories:
+        category_name = category.get('name')
+        if category_name and category_name not in category_names:
+            category_names.append(category_name)
+    return category_names
+
+
+def panorama_UrlFilteringProfiles(
+    panorama_obj: panos.panorama.Panorama,
+    config_xpath: str,
+    custom_categories: List[str],
+    predefined_categories: Optional[List[str]] = None,
+) -> Union[Dict[str, Any], bool]:
+    """XML-driven retrieval of URL Filtering profiles for the given config xpath.
+
+    Enhancements:
+    - Implicit Allow for predefined categories: seed with full predefined catalog, then subtract any
+      categories assigned to alert/block/continue/override. Union the result with any explicit <allow> members.
+    - Implicit Ignore for custom categories is preserved: seed with all custom categories, then subtract anything
+      assigned to any action (allow/alert/block/continue/override).
+    - Always requires a predefined catalog (selected via --urlSource) to avoid ambiguity.
+    """
+    logger.info("\tURL profiles (XML path).")
+    xml_data = panCore.xmlToLXML(panorama_obj.xapi.get(f"{config_xpath}/profiles/url-filtering"))
+
+    def _listdict_replace_with_values(target: Dict[int, str], values: List[str]) -> None:
+        # Overwrite placeholder {1:'None'} and re-index from 1 with unique, ordered values
+        target.clear()
+        i = 1
+        for v in values:
+            if v is None:
+                continue
+            if v in target.values():
+                continue
+            target[i] = v
+            i += 1
+
+    profile_map: Dict[str, Any] = {}
+    url_profiles = xml_data.xpath('//response/result/url-filtering/entry')
+    if len(url_profiles):
+        for url_profile in url_profiles:
+            profile_name = url_profile.get('name')
+            profile_map[profile_name] = {
+                'name': '',
+                'description': '',
+                'customBlockAction': '',
+                'lists': {
+                    'allow': {1: 'None'},
+                    'alert': {1: 'None'},
+                    'block': {1: 'None'},
+                    'continue': {1: 'None'},
+                    'override': {1: 'None'},
+                    'ignore': custom_categories[:],
+                    'customAllowList': {1: 'None'},
+                    'customBlockList': {1: 'None'},
+                    'customObjects': custom_categories[:]
+                },
+                'settings': {
+                    'logContainerPageOnly': 'Default (True)',
+                    'safeSearchEnforce': 'Default (False)',
+                    'headerLogging_UserAgent': 'Default',
+                    'headerLogging_Referer': 'Default',
+                    'headerLogging_XFF': 'Default'
+                },
+                'credentialEnforcement': {
+                    'mode': 'Default',
+                    'logSeverity': 'Default/Disabled',
+                    'lists': {
+                        'allow': {1: 'None/Disabled'},
+                        'alert': {1: 'None/Disabled'},
+                        'block': {1: 'None/Disabled'},
+                        'continue': {1: 'None/Disabled'}
+                    }
+                },
+                'httpHeaderInsertion': {
+                    1: {
+                        'name': 'NotConfigured'
+                    }
+                }
+            }
+            profile_map[profile_name]['name'] = profile_name
+            try:
+                profile_map[profile_name]['customBlockAction'] = url_profile.xpath('./action')[0].text
+            except Exception:
+                profile_map[profile_name]['customBlockAction'] = "notFound"
+
+            # Working sets for implicit logic
+            if not isinstance(predefined_categories, list) or not predefined_categories:
+                # Backward compatibility: if caller did not provide predefined categories, default to PANW catalog
+                try:
+                    predefined_categories = panorama_PredefinedUrlCategories(panorama_obj, 'panw')
+                except Exception:
+                    predefined_categories = []
+            predefined_all: List[str] = predefined_categories[:]
+            implicit_allow_working: set = set(predefined_all)   # seed with all predefined
+
+            if (url_profile.xpath('./description')):
+                profile_map[profile_name].update({'description': url_profile.xpath('./description')[0].text})
+            if (url_profile.xpath('./allow-list')):
+                i = 1
+                for item in url_profile.xpath('./allow-list')[0].getchildren():
+                    profile_map[profile_name]['lists']['customAllowList'].update({i: item.text})
+                    i += 1
+            if (url_profile.xpath('./block-list')):
+                i = 1
+                for item in url_profile.xpath('./block-list')[0].getchildren():
+                    profile_map[profile_name]['lists']['customBlockList'].update({i: item.text})
+                    i += 1
+
+            # Helper to ingest action membership from XML
+            def _ingest_action_list(action_tag: str) -> None:
+                nodes = url_profile.xpath(f'./{action_tag}')
+                if not nodes:
+                    return
+                i = 1
+                for item in nodes[0].getchildren():
+                    if item is None or item.text is None:
+                        continue
+                    # 1) Write into the report list for that action
+                    profile_map[profile_name]['lists'][action_tag][i] = item.text
+                    # 2) Custom implicit ignore: remove any custom category that was referenced anywhere
+                    if item.text in profile_map[profile_name]['lists']['ignore']:
+                        profile_map[profile_name]['lists']['ignore'].remove(item.text)
+                    # 3) Predefined implicit allow math:
+                    #    - If this membership is NOT 'allow', subtract it from the implicit-allow working set
+                    if action_tag in ('alert', 'block', 'continue', 'override') and item.text in implicit_allow_working:
+                        implicit_allow_working.discard(item.text)
+                    i += 1
+
+            # Ingest all action lists from XML (allow first so explicit order is preserved at the front)
+            for action_name in ['allow', 'alert', 'block', 'continue', 'override']:
+                _ingest_action_list(action_name)
+
+            if (url_profile.xpath('./credential-enforcement')):
+                profile_map[profile_name]['credentialEnforcement'].update({'mode': url_profile.xpath('./credential-enforcement/mode')[0].text})
+                try:
+                    profile_map[profile_name]['credentialEnforcement'].update({'logSeverity': url_profile.xpath('./credential-enforcement/log-severity')[0].text})
+                except Exception:
+                    pass
+                i = 1
+                if (url_profile.xpath('./credential-enforcement/allow-list')):
+                    for item in url_profile.xpath('./credential-enforcement/allow-list')[0].getchildren():
+                        profile_map[profile_name]['credentialEnforcement']['lists']['allow'].update({i: item.text})
+                        i += 1
+                    i = 1
+                if (url_profile.xpath('./credential-enforcement/alert-list')):
+                    for item in url_profile.xpath('./credential-enforcement/alert-list')[0].getchildren():
+                        profile_map[profile_name]['credentialEnforcement']['lists']['alert'].update({i: item.text})
+                        i += 1
+                    i = 1
+                if (url_profile.xpath('./credential-enforcement/block-list')):
+                    for item in url_profile.xpath('./credential-enforcement/block-list')[0].getchildren():
+                        profile_map[profile_name]['credentialEnforcement']['lists']['block'].update({i: item.text})
+                        i += 1
+                    i = 1
+                if (url_profile.xpath('./credential-enforcement/continue-list')):
+                    for item in url_profile.xpath('./credential-enforcement/continue-list')[0].getchildren():
+                        profile_map[profile_name]['credentialEnforcement']['lists']['continue'].update({i: item.text})
+                        i += 1
+            if (url_profile.xpath('./log-container-page-only')):
+                profile_map[profile_name]['settings'].update({'logContainerPageOnly': url_profile.xpath('./log-container-page-only')[0].text})
+            if (url_profile.xpath('./safe-search-enforcement')):
+                profile_map[profile_name]['settings'].update({'safeSearchEnforce': url_profile.xpath('./safe-search-enforcement')[0].text})
+            if (url_profile.xpath('./http-header-logging/user-agent')):
+                profile_map[profile_name]['settings'].update({'headerLogging_UserAgent': url_profile.xpath('./http-header-logging/user-agent')[0].text})
+            if (url_profile.xpath('./http-header-logging/referer')):
+                profile_map[profile_name]['settings'].update({'headerLogging_Referer': url_profile.xpath('./http-header-logging/referer')[0].text})
+            if (url_profile.xpath('./http-header-logging/x-forwarded-for')):
+                profile_map[profile_name]['settings'].update({'headerLogging_XFF': url_profile.xpath('./http-header-logging/x-forwarded-for')[0].text})
+            rule = 1
+            if (url_profile.xpath('./http-header-insertion')):
+                profile_map[profile_name]['httpHeaderInsertion'][1]['name'] = 'Configured'
+                for headerRule in url_profile.xpath('./http-header-insertion')[0].getchildren():
+                    profile_map[profile_name]['httpHeaderInsertion'][rule] = {'name': headerRule.get('name')}
+                    if headerRule.xpath('./http-header'):
+                        profile_map[profile_name]['httpHeaderInsertion'][rule]['headers'] = {1: {'name': 'None'}}
+                        i = 1
+                        for header in headerRule.xpath('./http-header')[0].getchildren():
+                            profile_map[profile_name]['httpHeaderInsertion'][rule]['headers'][i] = {}
+                            profile_map[profile_name]['httpHeaderInsertion'][rule]['headers'][i]['name'] = header.xpath('./name')[0].text
+                            profile_map[profile_name]['httpHeaderInsertion'][rule]['headers'][i]['value'] = header.xpath('./value')[0].text
+                            profile_map[profile_name]['httpHeaderInsertion'][rule]['headers'][i]['log'] = header.xpath('./log')[0].text
+                            i += 1
+                    rule += 1
+
+            # --- Implicit Allow finalization ---
+            # Merge explicit allow entries with the remaining implicit-allow set derived from predefined catalog.
+            # - Keep order stable: explicit allows first (as configured), then sorted implicit remainder.
+            explicit_allow_values: List[str] = []
+            if profile_map[profile_name]['lists']['allow'] != {1: 'None'}:
+                explicit_allow_values = [profile_map[profile_name]['lists']['allow'][k] for k in sorted(profile_map[profile_name]['lists']['allow'].keys())]
+            implicit_only = [c for c in sorted(implicit_allow_working) if c not in explicit_allow_values]
+            final_allow_values = explicit_allow_values + implicit_only
+            if len(final_allow_values) == 0:
+                # Preserve legacy behavior: leave a visible 'None' placeholder instead of an empty list/dict
+                profile_map[profile_name]['lists']['allow'] = {1: 'None'}
+            else:
+                _listdict_replace_with_values(profile_map[profile_name]['lists']['allow'], final_allow_values)
+        return profile_map
+    else:
+        return False
+
+
+def panorama_WildfireProfiles(panorama_obj: panos.panorama.Panorama, config_xpath: str) -> Union[Dict[str, Any], bool]:
+    """XML-driven retrieval of WildFire Analysis profiles for the given config xpath.
+    Direct port of getWildfireProfiles from panGroupsAndProfiles.py, preserving return structure and semantics.
+    """
+    logger.info("\tWildfire profiles (XML path).")
+    xml_data = panCore.xmlToLXML(panorama_obj.xapi.get(f"{config_xpath}/profiles/wildfire-analysis"))
+    profile_map: Dict[str, Any] = {}
+    wildfire_profiles = xml_data.xpath('//response/result/wildfire-analysis/entry')
+    if len(wildfire_profiles):
+        for profile in wildfire_profiles:
+            profile_name = profile.get('name')
+            if profile.xpath('./description'):
+                profile_description = profile.xpath('./description')[0].text
+            else:
+                profile_description = ''
+            profile_map[profile_name] = {
+                'name': profile_name,
+                'description': profile_description,
+                'rules': {}
+            }
+            for rule in profile.xpath('./rules/entry'):
+                rule_name = rule.get('name')
+                rule_direction = rule.xpath('./direction')[0].text
+                rule_analysis = rule.xpath('./analysis')[0].text
+                profile_map[profile_name]['rules'][rule_name] = {
+                    'name': rule_name,
+                    'direction': rule_direction,
+                    'analysis': rule_analysis
+                }
+                i = 0
+                profile_map[profile_name]['rules'][rule_name]['applications'] = {i: 'None'}
+                for app in rule.xpath('./application/member'):
+                    profile_map[profile_name]['rules'][rule_name]['applications'].update({i: app.text})
+                    i += 1
+                i = 0
+                profile_map[profile_name]['rules'][rule_name]['fileTypes'] = {i: 'None'}
+                for file_type in rule.xpath('./file-type/member'):
+                    profile_map[profile_name]['rules'][rule_name]['fileTypes'].update({i: file_type.text})
+        return profile_map
+    else:
+        return False
+
+
+def panorama_ProfileGroups(panorama_obj: panos.panorama.Panorama, config_xpath: str) -> Union[Dict[str, Any], bool]:
+    """XML-driven retrieval of Security Profile Groups for the given config xpath.
+    Direct port of getGroups preserving return structure (dict) and False semantics.
+    """
+    logger.info("\tProfile Groups (XML path).")
+    xml_data = panCore.xmlToLXML(panorama_obj.xapi.get(f"{config_xpath}/profile-group"))
+    dev_data: Dict[str, Any] = {}
+    groups = xml_data.xpath('//response/result/profile-group')
+    if len(groups):
+        for group in groups[0].getchildren():
+            group_name = group.get('name')
+            dev_data[group_name] = {"GroupName": group_name}
+            for child in group.getchildren():
+                dev_data[group_name].update({child.tag: child.getchildren()[0].text})
+        return dev_data
+    else:
+        return False
+
+
+def panorama_AntiVirusProfiles(panorama_obj: panos.panorama.Panorama, config_xpath: str) -> Union[Dict[str, Any], bool]:
+    """XML-driven retrieval of Anti-Virus profiles for the given config xpath.
+    Direct port of getAntivirusProfiles preserving return structure and False semantics.
+    """
+    logger.info("\tAnti-Virus profiles (XML path).")
+    xml_data = panCore.xmlToLXML(panorama_obj.xapi.get(f"{config_xpath}/profiles/virus"))
+    dev_data: Dict[str, Any] = {}
+    av_profiles = xml_data.xpath('//response/result/virus/entry')
+    if len(av_profiles):
+        for av_profile in av_profiles:
+            profile_name = av_profile.get('name')
+            dev_data[profile_name] = {}
+            for decoder in av_profile.xpath('./decoder/entry'):
+                decoder_name = decoder.get('name')
+                dev_data[profile_name][decoder_name] = {}
+                for action in decoder.getchildren():
+                    dev_data[profile_name][decoder_name].update({action.tag: action.text})
+        return dev_data
+    else:
+        return False
+
+
+def panorama_VulnerabilityProfiles(panorama_obj: panos.panorama.Panorama, config_xpath: str) -> Union[Dict[str, Any], bool]:
+    """XML-driven retrieval of Vulnerability Protection profiles for the given config xpath.
+    Direct port of getVulnerabilityProfiles preserving return structure and False semantics.
+    """
+    logger.info("\tVulnerability Protection profiles (XML path).")
+    xml_data = panCore.xmlToLXML(panorama_obj.xapi.get(f"{config_xpath}/profiles/vulnerability"))
+    dev_data: Dict[str, Any] = {}
+    vulnerability_profiles = xml_data.xpath('//response/result/vulnerability/entry')
+    if len(vulnerability_profiles):
+        for vulnerability_profile in vulnerability_profiles:
+            profile_name = vulnerability_profile.get('name')
+            dev_data[profile_name] = {}
+            if (vulnerability_profile.xpath('./description') == []):
+                dev_data[profile_name].update({'Description': ""})
+            else:
+                dev_data[profile_name].update({'Description': vulnerability_profile.xpath('./description')[0].text})
+            dev_data[profile_name]['rules'] = {}
+            for rule in vulnerability_profile.xpath('./rules/entry'):
+                rule_name = rule.get('name')
+                rule_action = rule.xpath('./action')[0][0].tag
+                dev_data[profile_name]['rules'][rule_name] = {'name': rule_name, 'packet-capture': 'Default (Disabled)'}
+                for element in rule.getchildren():
+                    if (not (len(element))):
+                        dev_data[profile_name]['rules'][rule_name].update({element.tag: element.text})
+                    else:
+                        string = ""
+                        i = 1
+                        for child in element:
+                            if child.text == '\n              ':
+                                child.text = None
+                            try:
+                                string += child.text
+                            except:
+                                string += child.tag
+                            if i < len(element):
+                                string += ", "
+                                i += 1
+                        dev_data[profile_name]['rules'][rule_name].update({element.tag: string})
+            dev_data[profile_name]['exceptions'] = {1: 'None'}
+            exception_number = 0
+            for exception in vulnerability_profile.xpath('./threat-exception/entry'):
+                exception_number += 1
+                exception_id = exception.get('name')
+                dev_data[profile_name]['exceptions'][exception_number] = {'ThreatID': exception_id}
+                for element in exception.getchildren():
+                    if (not (len(element))):
+                        dev_data[profile_name]['exceptions'][exception_number].update({element.tag: element.text})
+                    else:
+                        string = ""
+                        i = 1
+                        for child in element:
+                            if (child.text == '\n            ') or (child.text == '\n              '):
+                                child.text = None
+                            try:
+                                string += child.text
+                            except:
+                                if (child.tag == 'entry'):
+                                    try:
+                                        string += child.get('name')
+                                    except:
+                                        string += child.tag
+                                else:
+                                    string += child.tag
+                            if i < len(element):
+                                string += ", "
+                                i += 1
+                        dev_data[profile_name]['exceptions'][exception_number].update({element.tag: string})
+        return dev_data
+    else:
+        return False
+
+
+def panorama_AntiSpywareProfiles(panorama_obj: panos.panorama.Panorama, config_xpath: str) -> Union[Dict[str, Any], bool]:
+    """XML-driven retrieval of Anti-Spyware profiles for the given config xpath.
+    Direct port of getAntiSpywareProfiles preserving return structure and False semantics.
+    """
+    logger.info("\tAnti-Spyware profiles (XML path).")
+    xml_data = panCore.xmlToLXML(panorama_obj.xapi.get(f"{config_xpath}/profiles/spyware"))
+    dev_data: Dict[str, Any] = {}
+    as_profiles = xml_data.xpath('//response/result/spyware/entry')
+    if len(as_profiles):
+        for as_profile in as_profiles:
+            profile_name = as_profile.get('name')
+            dev_data[profile_name] = {'Name': profile_name}
+            if (as_profile.xpath('./description') == []):
+                dev_data[profile_name].update({'Description': ""})
+            else:
+                dev_data[profile_name].update({'Description': as_profile.xpath('./description')[0].text})
+            dev_data[profile_name]['rules'] = {}
+            for rule in as_profile.xpath('./rules/entry'):
+                rule_name = rule.get('name')
+                dev_data[profile_name]['rules'][rule_name] = {'name': rule_name}
+                for element in rule.getchildren():
+                    if (not (len(element))):
+                        dev_data[profile_name]['rules'][rule_name].update({element.tag: element.text})
+                    else:
+                        string = ""
+                        i = 1
+                        for child in element:
+                            if (child.text == '\n            ') or (child.text == '\n              '):
+                                child.text = None
+                            try:
+                                string += child.text
+                            except:
+                                string += child.tag
+                            if i < len(element):
+                                string += ", "
+                                i += 1
+                        dev_data[profile_name]['rules'][rule_name].update({element.tag: string})
+            dns_settings = as_profile.xpath('./botnet-domains')[0] if as_profile.xpath('./botnet-domains') else None
+            dev_data[profile_name]['dnsSettings'] = {}
+            if dns_settings is not None and (dns_settings.xpath('./packet-capture')):
+                dev_data[profile_name]['dnsSettings'].update({'packetCapture': dns_settings.xpath('./packet-capture')[0].text})
+            else:
+                dev_data[profile_name]['dnsSettings'].update({'packetCapture': 'disable'})
+            if dns_settings is not None and (dns_settings.xpath('./sinkhole/ipv4-address')):
+                dev_data[profile_name]['dnsSettings'].update({'ipv4Sinkhole': dns_settings.xpath('./sinkhole/ipv4-address')[0].text})
+            else:
+                dev_data[profile_name]['dnsSettings'].update({'ipv4Sinkhole': 'disable'})
+            if dns_settings is not None and (dns_settings.xpath('./sinkhole/ipv6-address')):
+                dev_data[profile_name]['dnsSettings'].update({'ipv6Sinkhole': dns_settings.xpath('./sinkhole/ipv6-address')[0].text})
+            else:
+                dev_data[profile_name]['dnsSettings'].update({'ipv6Sinkhole': 'disable'})
+            dev_data[profile_name]['dnsSettings']['lists'] = {}
+            for dns_list in as_profile.xpath('./botnet-domains/lists/entry'):
+                list_name = dns_list.get('name')
+                dev_data[profile_name]['dnsSettings']['lists'][list_name] = {}
+                dev_data[profile_name]['dnsSettings']['lists'][list_name].update({'name': list_name})
+                dev_data[profile_name]['dnsSettings']['lists'][list_name].update({'action': dns_list.xpath('./action')[0][0].tag})
+            dev_data[profile_name]['dnsSettings']['exceptions'] = {1: 'None'}
+            i = 1
+            for dns_exception in as_profile.xpath('./botnet-domains/threat-exception/entry'):
+                dev_data[profile_name]['dnsSettings']['exceptions'].update({i: dns_exception.get('name')})
+                i += 1
+            dev_data[profile_name]['exceptions'] = {1: 'None'}
+            exception_number = 0
+            for exception in as_profile.xpath('./threat-exception/entry'):
+                exception_number += 1
+                exception_id = exception.get('name')
+                dev_data[profile_name]['exceptions'][exception_number] = {'ThreatID': exception_id}
+                for element in exception.getchildren():
+                    if (not (len(element))):
+                        dev_data[profile_name]['exceptions'][exception_number].update({element.tag: element.text})
+                    else:
+                        string = ""
+                        i = 1
+                        for child in element:
+                            if (child.text == '\n            ') or (child.text == '\n              '):
+                                child.text = None
+                            try:
+                                string += child.text
+                            except:
+                                if (child.tag == 'entry'):
+                                    try:
+                                        string += child.get('name')
+                                    except:
+                                        string += child.tag
+                                else:
+                                    string += child.tag
+                            if i < len(element):
+                                string += ", "
+                                i += 1
+                        dev_data[profile_name]['exceptions'][exception_number].update({element.tag: string})
+        return dev_data
+    else:
+        return False
+
+
+def panorama_FileBlockingProfiles(panorama_obj: panos.panorama.Panorama, config_xpath: str) -> Union[Dict[str, Any], bool]:
+    """XML-driven retrieval of File Blocking profiles for the given config xpath.
+    Direct port of getFileBlockingProfiles preserving return structure and False semantics.
+    """
+    logger.info("\tFile blocking profiles (XML path).")
+    xml_data = panCore.xmlToLXML(panorama_obj.xapi.get(f"{config_xpath}/profiles/file-blocking"))
+    dev_data: Dict[str, Any] = {}
+    file_blocking_profiles = xml_data.xpath('//response/result/file-blocking/entry')
+    if len(file_blocking_profiles):
+        for file_blocking_profile in file_blocking_profiles:
+            file_blocking_profile_name = file_blocking_profile.get('name')
+            if file_blocking_profile.xpath('./description'):
+                file_blocking_profile_description = file_blocking_profile.xpath('./description')[0].text
+            else:
+                file_blocking_profile_description = ''
+            dev_data[file_blocking_profile_name] = {
+                'name': file_blocking_profile_name,
+                'description': file_blocking_profile_description,
+                'rules': {
+                    0: {
+                        'name': '',
+                        'applications': {0: ''},
+                        'fileTypes': {0: ''},
+                        'direction': '',
+                        'action': ''
+                    }
+                }
+            }
+            rule_num = 0
+            for rule in file_blocking_profile.xpath('./rules/entry'):
+                dev_data[file_blocking_profile_name]['rules'][rule_num] = {}
+                rule_name = rule.get('name')
+                dev_data[file_blocking_profile_name]['rules'][rule_num]['name'] = rule_name
+                i = 0
+                dev_data[file_blocking_profile_name]['rules'][rule_num]['applications'] = {0: ''}
+                for app in rule.xpath('./application/member'):
+                    dev_data[file_blocking_profile_name]['rules'][rule_num]['applications'][i] = app.text
+                    i += 1
+                i = 0
+                dev_data[file_blocking_profile_name]['rules'][rule_num]['fileTypes'] = {0: ''}
+                for file_type in rule.xpath('./file-type/member'):
+                    dev_data[file_blocking_profile_name]['rules'][rule_num]['fileTypes'][i] = file_type.text
+                    i += 1
+                if rule.xpath('./direction'):
+                    dev_data[file_blocking_profile_name]['rules'][rule_num]['direction'] = rule.xpath('./direction')[0].text
+                if rule.xpath('./action'):
+                    dev_data[file_blocking_profile_name]['rules'][rule_num]['action'] = rule.xpath('./action')[0].text
+                rule_num += 1
+        return dev_data
+    else:
+        return False
+
+
+
+def panorama_DeviceGroupHierarchy_topdown(panorama_obj: panos.panorama.Panorama) -> Dict[str, List[dict]]:
+    """Build a top-down Device Group hierarchy using the SDK bottom-up mapping.
+
+    Returns a dictionary shaped as:
+      {
+        'shared': [
+            { 'RootDG1': [ { 'ChildA': [ ... ] }, { 'ChildB': [ ... ] } ] },
+            { 'RootDG2': [ ... ] },
+            ...
+        ]
+      }
+
+    Notes:
+    - Uses pan-os-python to fetch the {child: parent_or_None} map via
+      panos.panorama.PanoramaDeviceGroupHierarchy(panorama_obj).fetch().
+    - Children are sorted alphabetically at each level for deterministic output.
+    - The structure is intentionally minimal and easy to traverse/pretty-print.
+    """
+    logger.info("\tBuilding Device Group hierarchy (top-down view)...")
+
+    try:
+        parent_of: Dict[str, Optional[str]] = panos.panorama.PanoramaDeviceGroupHierarchy(panorama_obj).fetch()
+    except Exception:
+        logger.exception("Failed to fetch Device Group hierarchy from Panorama")
+        raise
+
+    # 1) Build children index: parent_name -> [child_name, ...]
+    from collections import defaultdict
+    children_of: Dict[Optional[str], List[str]] = defaultdict(list)
+    for child_name, parent_name in (parent_of or {}).items():
+        children_of[parent_name].append(child_name)
+
+    # 2) Roots are those with parent None
+    root_device_groups: List[str] = sorted(children_of.get(None, []))
+
+    # 3) Recursive builder: returns {name: [ {child: [...]}, ... ]}
+    def build_subtree(device_group_name: str) -> dict:
+        child_names = sorted(children_of.get(device_group_name, []))
+        return {device_group_name: [build_subtree(child) for child in child_names]}
+
+    # 4) Wrap under the desired top key 'shared'
+    topdown: Dict[str, List[dict]] = {
+        'shared': [build_subtree(root) for root in root_device_groups]
+    }
+    return topdown
+
+
+def panorama_DeviceGroupHierarchy_topdown_with_firewalls(panorama_obj: panos.panorama.Panorama) -> Dict[str, List[dict]]:
+    """Build a top-down Device Group hierarchy and attach firewall membership.
+
+    Shape returned (children are nested the same way as panorama_DeviceGroupHierarchy_topdown, but each node
+    is a mapping to an object containing 'children' and 'firewalls'):
+      {
+        'shared': [
+          { 'RootDG': {
+                'children': [ { 'ChildDG': { 'children': [...], 'firewalls': [ {'hostname': str, 'serial': str}, ... ] } }, ... ],
+                'firewalls': [ {'hostname': str, 'serial': str}, ... ]
+            }
+          },
+          ...
+        ]
+      }
+
+    Notes:
+    - Firewall membership is derived from the SDK: each DeviceGroup object's `.children` list is the source of truth.
+      We iterate those children to collect firewall serials. Hostnames are optionally enriched by cross-referencing
+      the serial in panorama_showDevicesAll(panorama_obj) when available.
+    - Hostnames are preferred for display; serials are always included.
+    """
+    logger.info("\tBuilding Device Group hierarchy (top-down) with firewall membership...")
+
+    # Fetch bottom-up map {child: parent_or_None}
+    try:
+        parent_of: Dict[str, Optional[str]] = panos.panorama.PanoramaDeviceGroupHierarchy(panorama_obj).fetch()
+    except Exception:
+        logger.exception("Failed to fetch Device Group hierarchy from Panorama")
+        raise
+
+    # Build children index
+    from collections import defaultdict
+    children_of: Dict[Optional[str], List[str]] = defaultdict(list)
+    for child_name, parent_name in (parent_of or {}).items():
+        children_of[parent_name].append(child_name)
+
+    # Build firewall membership index: { dg_name: [ {hostname, serial}, ... ] }
+    # Primary source of truth is the SDK DeviceGroup.children list; we only use showDevicesAll to enrich hostnames by serial.
+    fw_index: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+
+    # Optional enrichment map: serial -> hostname (may be missing or empty)
+    devices_info: Dict[str, Dict[str, Any]] = {}
+    try:
+        devices_info = panorama_showDevicesAll(panorama_obj) or {}
+    except Exception:
+        logger.debug("panorama_showDevicesAll() failed; will proceed without hostname enrichment.")
+
+    try:
+        # Ensure DeviceGroup store is populated
+        panos.panorama.DeviceGroup.refreshall(panorama_obj)
+        dg_objects = panorama_obj.findall(panos.panorama.DeviceGroup) or []
+        for dg_obj in dg_objects:
+            dg_name = getattr(dg_obj, 'name', None) or (dg_obj.about().get('name') if hasattr(dg_obj, 'about') else None)
+            if not dg_name:
+                continue
+            # Iterate children; expect firewall objects
+            for child in getattr(dg_obj, 'children', []) or []:
+                try:
+                    serial = getattr(child, 'serial', None)
+                    if not serial:
+                        continue  # cannot index without serial
+                    serial = str(serial).strip()
+                    hostname = ''
+                    if devices_info:
+                        details = devices_info.get(serial) or {}
+                        hostname = (details.get('hostname') or '').strip()
+                    record = {
+                        'hostname': hostname if hostname else serial,
+                        'serial': serial,
+                    }
+                    fw_index[dg_name].append(record)
+                except Exception:
+                    # Skip any child we can't parse into a firewall record
+                    continue
+    except Exception:
+        logger.exception("Failed while building firewall membership from DeviceGroup.children; proceeding with empty membership lists.")
+        fw_index = defaultdict(list)
+
+    # Sort firewall lists by hostname for deterministic output
+    for dg_name, fw_list in fw_index.items():
+        try:
+            fw_index[dg_name] = sorted(fw_list, key=lambda r: (r.get('hostname') or '').lower())
+        except Exception:
+            pass
+
+    # Roots
+    root_device_groups: List[str] = sorted(children_of.get(None, []))
+
+    # Recursive builder: returns { name: { 'children': [ ... ], 'firewalls': [ ... ] } }
+    def build_subtree(device_group_name: str) -> dict:
+        child_names = sorted(children_of.get(device_group_name, []))
+        node_obj = {
+            'children': [build_subtree(child) for child in child_names],
+            'firewalls': fw_index.get(device_group_name, []),
+        }
+        return {device_group_name: node_obj}
+
+    topdown_with_fw: Dict[str, List[dict]] = {
+        'shared': [build_subtree(root) for root in root_device_groups]
+    }
+    return topdown_with_fw

@@ -56,10 +56,10 @@ if __name__ == "__main__":
     # to write to "Prisma Access" config scope use "Shared"
     parser.add_argument('-d', '--deviceGroups', help='CSV of device group:folder pairings', default="GlobalProtect_Azure:Shared,GP_Americas:Shared")
     parser.add_argument('-z', '--zoneMap', help='Replace zone names for SCM compatibility', default='TRUST:trust,Trust:trust,INTERNET:untrust,GLOBALPROTECT:trust')
-    args = parser.parse_known_args()
+    args, _ = parser.parse_known_args()
 
-    panCore.startLogging(args[0].logfile)
-    panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
+    panCore.startLogging(args.logfile)
+    panCore.configStart(headless=args.headless, configStorage=args.conffile)
     """
     if hasattr(panCore, 'panUser') and panCore.panUser is not None:
         pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)

@@ -26,7 +26,7 @@ Changelog
     Schedules, and Security rules are all created successfully.
 
 2024-01-03:
-    Added -F --sharedFolder to args. Replaced (pano_obj, 'All') with (pano_obj, args[0].sharedFolder) to facilitate
+    Added -F --sharedFolder to args. Replaced (pano_obj, 'All') with (pano_obj, args.sharedFolder) to facilitate
     variable destination folder when writing objects from Panorama's "Shared" context.
     Replaced "postSecurityPolicies(" with "processRulebasePolicies(" since pan-os-python co-mingles all policy types.
 
@@ -687,7 +687,7 @@ def runJobs(jobs):
     i = 1
     for job in jobs:
         panCore.logging.info(f'\tSubmitting job {job.name} ({i}/{jobCount}). Current thread count: {threading.active_count()}')
-        while threading.active_count() >= activeThreadsBefore + args[0].limitThreads:
+        while threading.active_count() >= activeThreadsBefore + args.limitThreads:
             panCore.logging.info(f"\t\t****** WAIT STATE ****\n"
                                  f"\t\tWaiting for other threads to finish... Current thread count: {threading.active_count()}")
             time.sleep(1)
@@ -959,10 +959,10 @@ if __name__ == "__main__":
     parser.add_argument('-z', '--zoneMap', help='Replace zone names for SCM compatibility', default='TRUST:trust,Trust:trust,INTERNET:untrust,GLOBALPROTECT:trust')
     parser.add_argument('-lo', '--location', help='Specify the location for Prisma Access configuration', default='')
     parser.add_argument('-lt', '--locationType', help='Specify the location type for Prisma Access configuration', default='')
-    args = parser.parse_known_args()
+    args, _ = parser.parse_known_args()
 
-    panCore.startLogging(args[0].logfile)
-    panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
+    panCore.startLogging(args.logfile)
+    panCore.configStart(headless=args.headless, configStorage=args.conffile)
     if hasattr(panCore, 'panUser') and panCore.panUser is not None:
         pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
     elif hasattr(panCore, 'panKey') and panCore.panKey is not None:
@@ -976,111 +976,111 @@ if __name__ == "__main__":
 
 
     panCore.logging.info("Posting tag data to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postTags(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postTags(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postTags(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
     panCore.logging.info("Posting address data to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postAddresses(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postAddresses(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postAddresses(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
     panCore.logging.info("Posting Address Groups to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postAddressGroups(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postAddressGroups(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postAddressGroups(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
     panCore.logging.info("Posting Regions to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postRegions(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postRegions(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postRegions(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
     panCore.logging.info("Posting App-ID data to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postApps(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postApps(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postApps(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
     panCore.logging.info("Posting App-ID groups to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postAppGroups(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postAppGroups(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postAppGroups(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
     panCore.logging.info("Posting App-ID filters to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postAppFilters(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postAppFilters(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postAppFilters(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
     panCore.logging.info("Posting service objects to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postService(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postService(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postService(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
     panCore.logging.info("Posting service groups to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postServiceGroup(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postServiceGroup(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postServiceGroup(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
 
     panCore.logging.info("Posting custom URL objects to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postURLs(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postURLs(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postURLs(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
 
     panCore.logging.info("Posting Dynamic User Groups to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postDynamicUserGroups(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postDynamicUserGroups(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postDynamicUserGroups(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
 
     panCore.logging.info("Posting External Dynamic Lists to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postEDLs(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postEDLs(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postEDLs(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
 
     panCore.logging.info("Posting Schedules to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
-        postSchedules(pano_obj, args[0].sharedFolder)
-    for dgPair in args[0].deviceGroups.split(","):
+        postSchedules(pano_obj, args.sharedFolder)
+    for dgPair in args.deviceGroups.split(","):
         postSchedules(pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1])
 
 
@@ -1088,7 +1088,7 @@ if __name__ == "__main__":
         2023-12-29
         Pausing development on this until SCM API updated to support profile configuration
     panCore.logging.info("Gathering DG data from panGroupsAndProfiles")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
         panGroupsAndProfiles.pano_obj = pano_obj
@@ -1098,7 +1098,7 @@ if __name__ == "__main__":
     """
 
     panCore.logging.info("Posting security policies to SCM:\n")
-    if args[0].noShared:
+    if args.noShared:
         pass
     else:
         preRules = panos.policies.PreRulebase().refreshall(pano_obj)
@@ -1107,7 +1107,7 @@ if __name__ == "__main__":
         postRules = panos.policies.PostRulebase().refreshall(pano_obj)
         if postRules:
             processRulebasePolicies(postRules[0], 'post', 'Shared')
-    for dgPair in args[0].deviceGroups.split(","):
+    for dgPair in args.deviceGroups.split(","):
         dg_obj, destination = pano_obj.find(dgPair.split(":")[0]), dgPair.split(":")[1]
         preRules = panos.policies.PreRulebase().refreshall(dg_obj)
         if preRules:  # Don't try to import an empty list of rules.
@@ -1117,7 +1117,7 @@ if __name__ == "__main__":
             processRulebasePolicies(postRules[0], context='post', destination=destination)  # select the rulebase from the list of rulebases returned
 
 """
-panCore.initXLSX(f"{args[0].workbookname.split('.xlsx')[0]}_2.xlsx")
+panCore.initXLSX(f"{args.workbookname.split('.xlsx')[0]}_2.xlsx")
 for scmEndpoint in panCore.postThingResults.keys():
     worksheet = panCore.workbook_obj.add_worksheet(scmEndpoint.replace('/','_'))
     panCore.headers = ['source', 'Name', 'Destination', 'Results', 'errMessage']
@@ -1142,7 +1142,7 @@ for scmEndpoint in panCore.postThingResults.keys():
 panCore.workbook_obj.close()
 """
 
-panCore.initXLSX(args[0].workbookname)
+panCore.initXLSX(args.workbookname)
 worksheet = panCore.workbook_obj.add_worksheet('Objects')
 panCore.headers = ['source', 'type', 'Name', 'Destination', 'Results', 'errMessage']
 for scmEndpoint in panCore.postThingResults.keys():

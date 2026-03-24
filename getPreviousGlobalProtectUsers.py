@@ -32,10 +32,10 @@ parser.add_argument('-l', '--headless', help="Operate in headless mode, without 
 parser.add_argument('-L', '--logfile', help="Log file to store log output to.", default='GP-PreviousUsers.log')
 parser.add_argument('-c', '--conffile', help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
 parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be generated", default='GP-PreviousUsers.xlsx')
-args = parser.parse_known_args()
+args, _ = parser.parse_known_args()
 
-panCore.startLogging(args[0].logfile)
-panCore.configStart(headless=args[0].headless, configStorage=args[0].conffile)
+panCore.startLogging(args.logfile)
+panCore.configStart(headless=args.headless, configStorage=args.conffile)
 if hasattr(panCore, 'panUser'):
     pano_obj, deviceGroups, firewalls, templates, tStacks = panCore.buildPano_obj(panAddress=panCore.panAddress, panUser=panCore.panUser, panPass=panCore.panPass)
 elif hasattr(panCore, 'panKey'):
@@ -95,7 +95,7 @@ for fw_obj in firewalls:
 auditEndTime = datetime.datetime.now(datetime.timezone.utc)
 panCore.logging.info(f"Finished gathering GP user data from {fwCount} total firewalls at {auditEndTime.strftime('%Y/%m/%d, %H:%M:%S - %Z')}")
 
-workbook = xlsxwriter.Workbook(args[0].workbookname)
+workbook = xlsxwriter.Workbook(args.workbookname)
 worksheet = workbook.add_worksheet('GP Previous Users')
 worksheet.write_row('A1', panCore.headers,workbook.add_format(panExcelStyles.styles['rowHeader']))
 if "FirewallName" in panCore.headers:
