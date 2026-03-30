@@ -23,6 +23,7 @@ Goals:
 from pancore import panCore, panExcelStyles
 #Import stock/public library modules
 import sys, datetime, xlsxwriter, argparse, re
+import panos
 
 def kvStringUserIdAgentState(lines):
     extrafield = 1
@@ -560,3 +561,4 @@ for fw_serial in dataRedistServers['firewalls'].keys():
             col += 1
         row += 1
 workbook_obj.close()
+
