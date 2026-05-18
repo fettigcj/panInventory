@@ -18,6 +18,7 @@ Changelog
 """
 
 from pancore import panCore, panExcelStyles
+from pancore import panWorkbookFunctions
 import datetime, sys, argparse
 
 parser = argparse.ArgumentParser(
@@ -32,7 +33,7 @@ parser.add_argument('-w', '--workbookname', help="Name of Excel workbook to be g
 args, _ = parser.parse_known_args()
 
 panCore.startLogging(args.logfile)
-panCore.initXLSX(args.workbookname)
+panCore.workbook_obj = panWorkbookFunctions.initXLSX(args.workbookname)
 panCore.configStart(headless=args.headless, configStorage=args.conffile)
 
 if hasattr(panCore, 'panUser'):

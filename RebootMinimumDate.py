@@ -1,4 +1,5 @@
 from pancore import panCore, panExcelStyles
+from pancore import panWorkbookFunctions
 #import panGroupsAndProfiles
 import panos_upgrade_assurance
 from panos_upgrade_assurance.check_firewall import CheckFirewall
@@ -223,7 +224,7 @@ for reboot in rebootList:
         if key not in headers:
             headers.append(key)
 
-panCore.initXLSX(args.workbookname)
+panCore.workbook_obj = panWorkbookFunctions.initXLSX(args.workbookname)
 worksheet = panCore.workbook_obj.add_worksheet("rebootLog")
 worksheet.write_row("A1", headers, panCore.workbook_obj.add_format(panExcelStyles.styles['rowHeader']))
 

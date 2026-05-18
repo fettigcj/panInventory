@@ -57,6 +57,7 @@ Functionality Notes / Warnings:
 """
 #Import custom library modules
 from pancore import panCore, panExcelStyles
+from pancore import panWorkbookFunctions
 import panGroupsAndProfiles
 #Import stock/public library modules
 import sys, datetime, xlsxwriter, argparse, re, time, panos, requests, json, threading, copy
@@ -1117,7 +1118,7 @@ if __name__ == "__main__":
             processRulebasePolicies(postRules[0], context='post', destination=destination)  # select the rulebase from the list of rulebases returned
 
 """
-panCore.initXLSX(f"{args.workbookname.split('.xlsx')[0]}_2.xlsx")
+panCore.workbook_obj = panWorkbookFunctions.initXLSX(f"{args.workbookname.split('.xlsx')[0]}_2.xlsx")
 for scmEndpoint in panCore.postThingResults.keys():
     worksheet = panCore.workbook_obj.add_worksheet(scmEndpoint.replace('/','_'))
     panCore.headers = ['source', 'Name', 'Destination', 'Results', 'errMessage']
@@ -1142,7 +1143,7 @@ for scmEndpoint in panCore.postThingResults.keys():
 panCore.workbook_obj.close()
 """
 
-panCore.initXLSX(args.workbookname)
+panCore.workbook_obj = panWorkbookFunctions.initXLSX(args.workbookname)
 worksheet = panCore.workbook_obj.add_worksheet('Objects')
 panCore.headers = ['source', 'type', 'Name', 'Destination', 'Results', 'errMessage']
 for scmEndpoint in panCore.postThingResults.keys():
