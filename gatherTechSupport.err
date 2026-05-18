@@ -1,0 +1,14 @@
+2026-04-14T20:05:59Z	INSAA01-LAB-FW02	021209023509	10.229.64.101	stats_dump	invalid-credential
+2026-04-14T20:07:12Z	INSAA01-LAB-FW01	021209023515	10.229.64.100	stats_dump	invalid-credential
+2026-04-14T20:24:51Z	CNSHA02-LAB-FW01	021209024458	10.128.255.21	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out
+2026-04-14T20:24:52Z	CNSHA03-FW03	021201129932	10.228.237.9	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out
+2026-04-14T20:24:52Z	CNSHA01-FW02-OLD	012001029740	10.128.255.7	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out
+2026-04-14T20:27:05Z	CNSHA01-FW02	026709028698	10.128.255.12	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out
+2026-04-14T20:29:00Z	CNSHA03-FW04	021201129958	10.228.237.10	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out
+2026-04-14T20:32:31Z	CNBJS01-FW01	021209034381	10.228.32.6	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out
+2026-04-14T20:37:55Z	CNBJS01-FW02	021209034344	10.228.32.7	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out
+2026-04-14T20:39:40Z	CNXAM01-FW02	021209050783	10.228.64.11	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out
+2026-04-14T20:40:41Z	CNSHA01-FW01	026709028693	10.128.255.11	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out
+2026-04-14T20:44:53Z	CNSHA02-LAB-FW02	021209024450	10.128.255.22	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out
+2026-04-14T20:44:54Z	CNXAM01-FW01	021209072786	10.228.64.10	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out
+2026-04-14T20:48:04Z	CNSHA01-FW01-OLD	012001029720	10.128.255.6	stats_dump	URLError: reason: _ssl.c:989: The handshake operation timed out

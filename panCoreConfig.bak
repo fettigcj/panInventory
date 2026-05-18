@@ -1,0 +1,33 @@
+{
+    "method": "localFile",
+    "scmConfURL": "https://api.sase.paloaltonetworks.com/sse/config/v1",
+    "scmAuthURL": "https://auth.apps.paloaltonetworks.com/oauth2/access_token",
+    "localFile": {
+        "panAddress": "zappala0001.netsec.ko.com",
+        "panUser": "Z05391",
+        "panPass": "eNoLzszJqVTwyc9LVwhILC4uzy9KMVIEAFTBB4Q=",
+        "panKey": "null",
+        "panAuthType": "password",
+        "scmUser": "null",
+        "scmPass": "null",
+        "scmTSG": "null"
+    },
+    "panScan": {
+        "MessageToUser": "set haMember to 'active' if scripts calling this config file will need to edit config elements.",
+        "haMember": "passive",
+        "dbHost": "null",
+        "dbUser": "null",
+        "dbPass": "null"
+    },
+    "environmentVariables": {
+        "MessageToUser": "THESE ARE NOT TO STORE LOGON INFO. THESE ARE TO STORE WHERE TO GET THAT LOGON INFO",
+        "panAddress": "panAddress",
+        "panKey": "panKey",
+        "panUser": "panUser",
+        "panPass": "panPass",
+        "panAuthType": "panAuthType",
+        "scmUser": "scmUser",
+        "scmPass": "scmPass",
+        "scmTSG": "scmTSG"
+    }
+}

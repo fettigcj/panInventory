@@ -114,8 +114,12 @@ if __name__ == "__main__":
             ruleBase = type(rule_obj.parent).__name__
             container_obj = (rule_obj.parent).parent
             ruleParent = "PanoramaShared" if isinstance(container_obj, panos.panorama.Panorama)  else container_obj.name
-            if rule_obj.category and rule_obj.category != ['any']:
-                for category in rule_obj.category:
+            if isinstance(rule_obj, panos.policies.DecryptionRule):
+                categoryList = rule_obj.url_categories
+            else:
+                categoryList = rule_obj.category
+            if categoryList and categoryList != ['any']:
+                for category in categoryList:
                     if category not in urlCategoryData.keys():
                         panCore.logging.warning(f"  URL category '{category}' not found in the urlCategoryData dictionary. Skipping...")
                         continue

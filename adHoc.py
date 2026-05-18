@@ -562,3 +562,52 @@ for fw_serial in dataRedistServers['firewalls'].keys():
         row += 1
 workbook_obj.close()
 
+# Build certificate data from Panorama configuration
+certData = {
+    'shared': {},
+    'vsys': {}
+}
+
+# Parse per-vsys certificates under localhost.localdomain
+try:
+    xml_data_vsys = panCore.xmlToLXML(pano_obj.xapi.get("/config/devices/entry[@name='localhost.localdomain']/vsys"))
+    for vsys_entry in xml_data_vsys.xpath('///response/result/vsys/entry'):
+        vsys_name = vsys_entry.attrib.get('name', 'unknown')
+        certData['vsys'][vsys_name] = {}
+        for cert in vsys_entry.xpath('./certificate/entry'):
+            cert_name = cert.attrib.get('name')
+            if not cert_name:
+                continue
+            entry = {'name': cert_name}
+            for tag in [
+                'subject-hash', 'issuer-hash', 'not-valid-before', 'issuer',
+                'not-valid-after', 'common-name', 'expiry-epoch', 'ca',
+                'subject', 'public-key', 'algorithm', 'common-name-int', 'subject-int'
+            ]:
+                node = cert.find(f'./{tag}')
+                entry[tag] = (node.text.strip() if node is not None and node.text is not None else '')
+            certData['vsys'][vsys_name][cert_name] = entry
+except Exception as e:
+    panCore.logging.warning(f"Failed parsing vsys certificates: {e}")
+
+# Parse shared certificates
+try:
+    xml_data_shared = panCore.xmlToLXML(pano_obj.xapi.get('/config/shared/certificate'))
+    for cert in xml_data_shared.xpath('///response/result/certificate/entry'):
+        cert_name = cert.attrib.get('name')
+        if not cert_name:
+            continue
+        entry = {'name': cert_name}
+        for tag in [
+            'subject-hash', 'issuer-hash', 'not-valid-before', 'issuer',
+            'not-valid-after', 'common-name', 'expiry-epoch', 'ca',
+            'subject', 'public-key', 'algorithm', 'common-name-int', 'subject-int'
+        ]:
+            node = cert.find(f'./{tag}')
+            entry[tag] = (node.text.strip() if node is not None and node.text is not None else '')
+        certData['shared'][cert_name] = entry
+except Exception as e:
+    panCore.logging.warning(f"Failed parsing shared certificates: {e}")
+
+
+
