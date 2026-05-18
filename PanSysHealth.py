@@ -12,6 +12,7 @@
 
 
 from pancore import panCore, panExcelStyles
+from pancore import panWorkbookFunctions
 #import json, requests
 # from collections import OrderedDict
 #import re
@@ -91,7 +92,7 @@ def getResourceMonitor():
 def getFileList():
     xmlData = panCore.xmlToLXML(fw_obj.op("show system files"))
 
-panCore.initXLSX(workBookName)
+panCore.workbook_obj = panWorkbookFunctions.initXLSX(workBookName)
 panCore.configStart()
 pano_obj, deviceGroups, firewalls = panCore.buildPano_obj(panCore.panAddress,panCore.panUser,panCore.panPass)
 

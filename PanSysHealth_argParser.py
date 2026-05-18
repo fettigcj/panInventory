@@ -20,6 +20,7 @@ Goals:
 
 #Import custom library modules
 from pancore import panCore, panExcelStyles
+from pancore import panWorkbookFunctions
 #Import stock/public library modules
 import time, datetime, xlsxwriter, argparse, sys
 
@@ -154,7 +155,7 @@ for fw_obj in firewalls:
 #######################################################################################
 ############################## Write Excel workbook ## ################################
 
-panCore.initXLSX(args.workbookname)
+panCore.workbook_obj = panWorkbookFunctions.initXLSX(args.workbookname)
 
 panCore.logging.info("Writing firewall resource monitor data:")
 panCore.headers = ['Firewall','Dataplane','ResourceMeter', 'Core', 'tockInterval',1,2,3,4,5,6,7,8,9,10,11,12,13]
