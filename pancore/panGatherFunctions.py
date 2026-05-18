@@ -7,7 +7,7 @@ from panos.firewall import Firewall
 from panos.network import Zone
 from panos.device import SystemSettings, SyslogServer, SyslogServerProfile
 from typing import Dict, List, Tuple, Union, Any, Optional
-import lxml, logging, copy, re, time, os
+import lxml, logging, copy, re, time, os, requests
 from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
@@ -167,7 +167,12 @@ def either_RunExportAndDownload(pan_obj: Union[panos.firewall.Firewall, panos.pa
             break
         except Exception as exc:
             last_message = str(exc)
-            if isinstance(exc, PanDeviceXapiError) and "generation" in last_message.lower() and "pending" in last_message.lower():
+            lower_last = last_message.lower()
+            # Immediate abort on invalid credential to avoid useless retries
+            if ("invalid credential" in lower_last) or (" code: 403" in lower_last) or ("status code: 403" in lower_last):
+                logger.warning(f"Authentication failed (Invalid Credential/403) while queuing export '{exportType}' for {panLabel}; aborting without further retries.")
+                return False, "", "", "invalid-credential"
+            if isinstance(exc, PanDeviceXapiError) and "generation" in lower_last and "pending" in lower_last:
                 # If another export generation is already running, wait and retry without logging stack trace noise
                 # expected phrase 'Another generation is pending' may vary slightly among pan-os versions.
                 # testing for 'generation' and 'pending' should successfully identify when another job is running.
@@ -2039,3 +2044,235 @@ def panorama_DeviceGroupHierarchy_topdown_with_firewalls(panorama_obj: panos.pan
         'shared': [build_subtree(root) for root in root_device_groups]
     }
     return topdown_with_fw
+
+
+
+def api_queue_export_job(panorama_host: str, api_key: str, export_category: str, target_serial: Optional[str] = None, session: Optional[requests.Session] = None, verify_ssl: bool = True) -> Tuple[bool, str, str, Optional[bytes]]:
+    """Submit/queue an export job via Panorama XML API using POST form data.
+    Returns (is_successful, job_id, message, raw_xml_bytes)."""
+    export_category = (export_category or "").replace("_", "-")
+    if export_category not in {"tech-support", "stats-dump"}:
+        return False, "", "invalid-export-type", None
+    base_url = f"https://{panorama_host}/api/"
+    http = session or requests.Session()
+    form: Dict[str, Any] = {"type": "export", "category": export_category, "key": api_key}
+    if isinstance(target_serial, str) and target_serial.strip() and target_serial.strip().lower() != "self":
+        form["target"] = target_serial.strip()
+    try:
+        response = http.post(base_url, data=form, timeout=(15, 300), verify=verify_ssl)
+        response.raise_for_status()
+        xml_root = lxml.etree.fromstring(response.content)
+        job_element = xml_root.find(".//job")
+        if job_element is None or not (job_element.text or "").strip():
+            return False, "", "missing-job-id", response.content
+        return True, job_element.text.strip(), "", response.content
+    except Exception as exc:
+        return False, "", str(exc), getattr(response, "content", None) if 'response' in locals() else None
+
+
+def api_get_export_status(panorama_host: str, api_key: str, export_category: str, job_id: str, target_serial: Optional[str] = None, session: Optional[requests.Session] = None, verify_ssl: bool = True) -> Tuple[str, str, Optional[bytes]]:
+    """Poll export job status via POST. Returns (job_state, job_progress, raw_xml_bytes)."""
+    export_category = (export_category or "").replace("_", "-")
+    base_url = f"https://{panorama_host}/api/"
+    http = session or requests.Session()
+    form: Dict[str, Any] = {"type": "export", "category": export_category, "action": "status", "job-id": job_id, "key": api_key}
+    if isinstance(target_serial, str) and target_serial.strip() and target_serial.strip().lower() != "self":
+        form["target"] = target_serial.strip()
+    try:
+        response = http.post(base_url, data=form, timeout=(15, 300), verify=verify_ssl)
+        response.raise_for_status()
+        xml_root = lxml.etree.fromstring(response.content)
+        state_node = xml_root.find(".//status")
+        progress_node = xml_root.find(".//progress")
+        return (state_node.text if state_node is not None else "", progress_node.text if progress_node is not None else "" , response.content)
+    except Exception:
+        return "", "", getattr(response, "content", None) if 'response' in locals() else None
+
+
+def api_download_export_file(panorama_host: str, api_key: str, job_id: str, export_category: Optional[str] = None, target_serial: Optional[str] = None, session: Optional[requests.Session] = None, verify_ssl: bool = True) -> Tuple[bool, Optional[bytes], str, Optional[bytes]]:
+    """Download the finished export file via POST. If export_category is None, omit it (fallback path).
+    Returns (is_successful, content_bytes, message, raw_error_xml_bytes)."""
+    base_url = f"https://{panorama_host}/api/"
+    http = session or requests.Session()
+    form: Dict[str, Any] = {"type": "export", "action": "get", "job-id": job_id, "key": api_key}
+    if export_category:
+        form["category"] = (export_category or "").replace("_", "-")
+    if isinstance(target_serial, str) and target_serial.strip() and target_serial.strip().lower() != "self":
+        form["target"] = target_serial.strip()
+    try:
+        response = http.post(base_url, data=form, timeout=(15, 1800), verify=verify_ssl, stream=True)
+        response.raise_for_status()
+        content_type = response.headers.get("Content-Type", "").lower()
+        # Treat non-XML as success (tgz or octet-stream)
+        if content_type.startswith("application/xml") or (response.content[:1] == b"<"):
+            return False, None, "xml-error-response", response.content
+        return True, response.content, "", None
+    except Exception as exc:
+        return False, None, str(exc), getattr(response, "content", None) if 'response' in locals() else None
+
+
+def api_RunExportAndDownload(pan_obj: Union[panos.firewall.Firewall, panos.panorama.Panorama], exportType: str, file_prefix: str = "", output_dir: str = ".", retry_limit: int = 10, retry_interval: int = 60, known_hostname: Optional[str] = None, known_serial: Optional[str] = None, panorama_host: Optional[str] = None, api_key: Optional[str] = None, target_serial: Optional[str] = None, verify_ssl: bool = False) -> Tuple[bool, str, str, str]:
+    """
+    Simplified orchestrator that uses POST-based helpers and does NOT depend on SDK objects.
+    Accepts explicit panorama_host, api_key, and target_serial (or 'self'). Keeps return tuple unchanged.
+    :param verify_ssl: When False (default), disable TLS verification to permit self-signed/intercepting proxies.
+    """
+    # Optionally suppress warnings when verification is disabled
+    if not verify_ssl:
+        try:
+            import urllib3
+            from urllib3.exceptions import InsecureRequestWarning
+            urllib3.disable_warnings(category=InsecureRequestWarning)
+            logger.warning("TLS certificate verification is DISABLED for Panorama connections; proceed with caution.")
+        except Exception:
+            pass
+
+    export_category = (exportType or "").replace("_", "-")
+    if export_category not in {"tech-support", "stats-dump"}:
+        error_message = "exportType must be 'tech_support' or 'stats_dump'"
+        logger.error(error_message)
+        return False, "", "", error_message
+
+    hostname = (known_hostname or "unknown-hostname").strip() or "unknown-hostname"
+
+    resolved_panorama_host = (panorama_host or "").strip()
+    resolved_api_key = (api_key or "").strip()
+    resolved_target_serial = (target_serial or known_serial or "").strip()
+    is_self_export = isinstance(resolved_target_serial, str) and resolved_target_serial.lower() == "self"
+
+    if not resolved_panorama_host:
+        logger.error("missing-panorama-host")
+        return False, "", "", "missing-panorama-host"
+    if not resolved_api_key:
+        logger.error("missing-api-key")
+        return False, "", "", "missing-api-key"
+    if (not is_self_export) and (not resolved_target_serial):
+        logger.error("missing-target-serial")
+        return False, "", "", "missing-target-serial"
+
+    # 1) Queue job with retries
+    job_id = ""
+    raw_xml: Optional[bytes] = None
+    last_message = ""
+    for attempt in range(1, max(1, int(retry_limit)) + 1):
+        if attempt == retry_limit:
+            logger.warning(f"\t Retry limit ({retry_limit}) reached. This will be our final attempt before giving up...")
+        ok, queued_job_id, message, xml_bytes = api_queue_export_job(
+            panorama_host=resolved_panorama_host,
+            api_key=resolved_api_key,
+            export_category=export_category,
+            target_serial=resolved_target_serial,
+            verify_ssl=verify_ssl,
+        )
+        raw_xml = xml_bytes
+        if ok and queued_job_id:
+            job_id = queued_job_id
+            job_started_utc = datetime.now(timezone.utc)
+            break
+        else:
+            last_message = message or "job-id-missing"
+            logger.warning(f"Attempt {attempt}/{retry_limit}: {last_message}")
+            if attempt < retry_limit:
+                logger.info(f"Waiting {retry_interval} seconds before retrying...")
+                time.sleep(retry_interval)
+
+    if not job_id:
+        return False, "", "", (last_message or "job-id-missing")
+
+    logger.info(f"Export type '{export_category}' scheduled as job {job_id} for {(hostname + ' (' + resolved_target_serial + ')') if not is_self_export else ('Panorama:' + resolved_panorama_host)} at {datetime.now(timezone.utc).strftime('%Y/%m/%d, %H:%M:%S - UTC')}")
+
+    # 2) Initial grace delay then first status poll
+    time.sleep(60)
+    state, progress, status_xml = api_get_export_status(
+        panorama_host=resolved_panorama_host,
+        api_key=resolved_api_key,
+        export_category=export_category,
+        job_id=job_id,
+        target_serial=resolved_target_serial,
+        verify_ssl=verify_ssl,
+    )
+
+    # 3) Poll loop
+    wait_counter = 1
+    while (state == "ACT") and (wait_counter <= retry_limit):
+        logger.info(f"    > Job {job_id} for {hostname} still active after poll #{wait_counter}. Current Progress: {progress}. Waiting {retry_interval} seconds before next check.")
+        time.sleep(retry_interval)
+        state, progress, status_xml = api_get_export_status(
+            panorama_host=resolved_panorama_host,
+            api_key=resolved_api_key,
+            export_category=export_category,
+            job_id=job_id,
+            target_serial=resolved_target_serial,
+            verify_ssl=verify_ssl,
+        )
+        wait_counter += 1
+
+    # 4) Timeout
+    if state == "ACT":
+        try:
+            error_filename = f"exportTimeout_{hostname}_{export_category.replace('-', '_')}.xml"
+            error_path = os.path.join(output_dir or '.', error_filename)
+            with open(error_path, 'wb') as fd:
+                fd.write(status_xml or b'')
+            logger.error(f"Wrote timeout XML to {error_path}")
+        except Exception:
+            logger.error("Failed to write timeout XML to disk.")
+        return False, job_id, "", "job-poll-timeout"
+
+    finished_time_utc = datetime.now(timezone.utc)
+    logger.info(f"Job {job_id} for {hostname} is no longer active at {finished_time_utc.strftime('%Y/%m/%d, %H:%M:%S - UTC')}")
+
+    if state != "FIN":
+        try:
+            error_filename = f"exportError_{hostname}_{export_category.replace('-', '_')}.xml"
+            error_path = os.path.join(output_dir or '.', error_filename)
+            with open(error_path, 'wb') as fd:
+                fd.write(status_xml or b'')
+            logger.error(f"Job state was '{state}'. Wrote error XML to {error_path}")
+        except Exception:
+            logger.error(f"Job state was '{state}'. Additionally failed to write error XML to disk.")
+        return False, job_id, "", f"unexpected-job-state:{state}"
+
+    # 5) Download: first include category, then fallback without
+    ok, content_bytes, message, xml_error = api_download_export_file(
+        panorama_host=resolved_panorama_host,
+        api_key=resolved_api_key,
+        job_id=job_id,
+        export_category=export_category,
+        target_serial=resolved_target_serial,
+        verify_ssl=verify_ssl,
+    )
+    if not ok:
+        lower_msg = (message or "").lower()
+        illegal_cat = ("illegal value for parameter" in lower_msg) or (xml_error and b"illegal value for parameter" in xml_error.lower())
+        if illegal_cat or True:  # Attempt fallback regardless if first try failed
+            ok2, content_bytes2, message2, xml_error2 = api_download_export_file(
+                panorama_host=resolved_panorama_host,
+                api_key=resolved_api_key,
+                job_id=job_id,
+                export_category=None,
+                target_serial=resolved_target_serial,
+                verify_ssl=verify_ssl,
+            )
+            if not ok2:
+                detail_text = message2 or (xml_error2.decode(errors='ignore') if xml_error2 else "download-failed")
+                logger.exception(f"Failed fallback download (without category) for job {job_id} on {hostname}")
+                return False, job_id, "", detail_text
+            content_bytes = content_bytes2
+
+    # 6) Save file
+    timestamp_token = finished_time_utc.strftime('%Y-%m-%d-%H_UTC')
+    safe_category = export_category.replace('-', '_')
+    file_basename = f"{file_prefix}{safe_category}_{hostname}_{timestamp_token}.tgz"
+    output_directory_path = output_dir or '.'
+    os.makedirs(output_directory_path, exist_ok=True)
+    saved_file_path = os.path.join(output_directory_path, file_basename)
+    try:
+        with open(saved_file_path, 'wb') as fd:
+            fd.write(content_bytes or b'')
+    except Exception as exc:
+        logger.exception(f"Failed to write export file to {saved_file_path}")
+        return False, job_id, "", str(exc)
+
+    logger.info(f"Wrote export file to {saved_file_path}")
+    return True, job_id, saved_file_path, ""

@@ -9,24 +9,18 @@ Changelog
 2024-04-05  Added to GIT repo
 2026-01-16  Refactor: add --exportType; queue jobs across all firewalls and record Job IDs per category
 
-Goals
-- Phase 1: queue jobs only (tech_support, stats_dump) and build a results dictionary
-- Retrieval/writing will be added in a subsequent update
 """
-
-# Helper to queue a single export category and return the standard entry dict
-# Returns: (entry_dict, job_id)
-# entry_dict schema: {"state": "queued"|"error", "job_id": str, "message": str}
 
 parser = argparse.ArgumentParser(prog="gatherTechSupport", description="Run PAN-OS export jobs (tech_support, stats_dump, or both) across managed firewalls with optional multithreading and download to disk.")
 parser.add_argument("-I", "--headless", help="Disable Interactions; operate in headless mode, without user input (disables panCore credential prompts)", default=False, action="store_true")
 parser.add_argument("-L", "--logfile", help="Log file to store log output to.", default="gatherTSF.log")
 parser.add_argument("-c", "--conffile", help="Specify the config file to read options from. Default 'panCoreConfig.json'.", default="panCoreConfig.json")
-parser.add_argument("-E", "--exportType", help="Which export to run: 'tech_support', 'stats_dump', or 'both'", choices=["tech_support", "stats_dump", "both"], default="both")
+parser.add_argument("-E", "--exportType", help="Which export to run: 'tech_support', 'stats_dump', or 'both'", choices=["tech_support", "stats_dump", "both"], default="stats_dump")
 parser.add_argument("-O", "--outputDirectory", help="Directory to save downloaded export archives. Defaults to current working directory.", default=".")
 parser.add_argument("-T", "--threadLimit", type=int, help="Maximum number of devices to process concurrently.", default=15)
 parser.add_argument("-R", "--retryLimit", type=int, help="Maximum number of attempts for job creation and status polling (default: 10).", default=15)
 parser.add_argument("-W", "--retryInterval", type=int, help="Seconds to wait between attempts when the device is busy or job remains active (default: 60).", default=180)
+parser.add_argument("--verifySSL", help="Verify TLS certificates when connecting to Panorama. Default disabled to permit self-signed chains.", action="store_true", default=False)
 args, _ = parser.parse_known_args()
 logger = panCore.startLogging(args.logfile)
 
@@ -83,6 +77,20 @@ import os
 output_directory = args.outputDirectory or "."
 os.makedirs(output_directory, exist_ok=True)
 
+# Error log for per-device failures (thread-safe appends)
+error_log_path = os.path.join(output_directory, "gatherTechSupport.err")
+_error_file_lock = threading.Lock()
+
+def _append_error_line(hostname: str, serial_number: str, management_ip: str, export_category: str, message: str) -> None:
+    try:
+        timestamp_utc = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+        line = f"{timestamp_utc}\t{hostname}\t{serial_number}\t{management_ip or 'unknown-ip'}\t{export_category}\t{message}\n"
+        with _error_file_lock:
+            with open(error_log_path, "a", encoding="utf-8") as fd:
+                fd.write(line)
+    except Exception:
+        logger.exception("Failed to append to gatherTechSupport.err")
+
 # Determine which categories to run (snake_case); when both, run tech_support first, then stats_dump
 if args.exportType == "both":
     selected_categories = ["tech_support", "stats_dump"]
@@ -138,9 +146,67 @@ def export_categories_for_device(firewall_obj, categories: _List[str]) -> _Tuple
 
     try:
         per_category = {}
+        # Build a direct firewall object using the management IP so we bypass Panorama relay
+        management_ip = None
+        try:
+            # Reuse previously fetched system_info if available in this scope
+            if 'system_info' in locals() and isinstance(system_info, dict):
+                management_ip = system_info.get('system', {}).get('ip-address')
+            if not management_ip:
+                sysinfo_2 = firewall_obj.show_system_info()
+                management_ip = sysinfo_2.get('system', {}).get('ip-address')
+        except Exception:
+            management_ip = None
+
+        if not management_ip:
+            logger.error(f"Could not determine management IP for {hostname} ({serial_number}); skipping exports for this device.")
+            for export_category in categories:
+                per_category[export_category] = {
+                    "state": "error",
+                    "job_id": "",
+                    "file_path": "",
+                    "message": "missing-management-ip",
+                }
+            return serial_number, hostname, per_category
+
+        # Create a direct SDK Firewall object using the Panorama API key (assumes same key is valid on firewalls)
+        pano_api_key = getattr(pano_obj, "api_key", None) or getattr(panCore, "panKey", None) or ""
+        fw_direct = panos.firewall.Firewall(hostname=management_ip, api_key=pano_api_key)
+
+        # Quick auth probe: detect devices where Panorama API key does not work (local account missing)
+        try:
+            # Use a lightweight command; any auth failure will raise immediately
+            _ = fw_direct.show_system_info()
+        except Exception as auth_exc:
+            auth_message = str(auth_exc)
+            lower_auth = auth_message.lower()
+            if ("invalid credential" in lower_auth) or (" code: 403" in lower_auth) or ("status code: 403" in lower_auth):
+                logger.warning(f"Authentication failed for {hostname} ({serial_number}) at {management_ip}: Invalid Credential. Skipping exports for this device.")
+                for export_category in categories:
+                    _append_error_line(hostname, serial_number, management_ip, export_category, "invalid-credential")
+                    per_category[export_category] = {
+                        "state": "error",
+                        "job_id": "",
+                        "file_path": "",
+                        "message": "invalid-credential",
+                    }
+                return serial_number, hostname, per_category
+            else:
+                # Other errors propagate as before
+                logger.exception(f"Unexpected authentication error on {hostname} ({serial_number}) at {management_ip}")
+                for export_category in categories:
+                    _append_error_line(hostname, serial_number, management_ip, export_category, auth_message)
+                    per_category[export_category] = {
+                        "state": "error",
+                        "job_id": "",
+                        "file_path": "",
+                        "message": auth_message,
+                    }
+                return serial_number, hostname, per_category
+
         for export_category in categories:
             is_successful, job_id, saved_path, message = panGatherFunctions.either_RunExportAndDownload(
-                firewall_obj,
+                fw_direct,
                 exportType=export_category,
                 file_prefix="",
                 output_dir=output_directory,
@@ -149,6 +215,8 @@ def export_categories_for_device(firewall_obj, categories: _List[str]) -> _Tuple
                 known_hostname=hostname,
                 known_serial=serial_number,
             )
+            if not is_successful and (message or "").lower() == "invalid-credential":
+                _append_error_line(hostname, serial_number, management_ip, export_category, "invalid-credential")
             per_category[export_category] = {
                 "state": "success" if is_successful else "error",
                 "job_id": job_id,
