@@ -1,0 +1,4 @@
+[submodule "pancore"]
+	path = pancore
+	url = https://github.com/fettigcj/pancore
+	branch = main
