@@ -109,16 +109,41 @@ if __name__ == "__main__":
         dgData[dg_obj.name]['urlObjects_detailed'] = panGatherFunctions.either_CustomUrlCategories_detailed(dg_obj)
         if dgData[dg_obj.name]['urlCategories']:
             # If the device group has locally defined URL category objects incorporate them into "Custom URL categories"
+            def coerce_to_list(value):
+                # Ensure we always pass a list to the profile gatherer and when concatenating
+                if isinstance(value, list):
+                    return value
+                if value is None or value is False:
+                    return []
+                if isinstance(value, (set, tuple)):
+                    return list(value)
+                # Avoid treating True as 1; return empty for bare booleans
+                if isinstance(value, bool):
+                    return []
+                return [value]
+            shared_categories_list = coerce_to_list(dgData['shared'].get('urlCategories'))
+            local_categories_list = coerce_to_list(dgData[dg_obj.name].get('urlCategories'))
             dgData[dg_obj.name]['urlProfiles'] = panGatherFunctions.panorama_UrlFilteringProfiles(
                             pano_obj,
                             dg_obj.xpath(),
-                            (dgData['shared']['urlCategories'] + dgData[dg_obj.name]['urlCategories']),
+                            (shared_categories_list + local_categories_list),
                             dgData['predefined']['urlCategories'],
                         )
         else:
             # else just use shared (If 'Shared' has custom URL objects.... )
-            if dgData['shared']['urlCategories']:
-                dgData[dg_obj.name]['urlProfiles'] = panGatherFunctions.panorama_UrlFilteringProfiles(pano_obj, dg_obj.xpath(), (dgData['shared']['urlCategories']))
+            def coerce_to_list(value):
+                if isinstance(value, list):
+                    return value
+                if value is None or value is False:
+                    return []
+                if isinstance(value, (set, tuple)):
+                    return list(value)
+                if isinstance(value, bool):
+                    return []
+                return [value]
+            shared_categories_list = coerce_to_list(dgData['shared'].get('urlCategories'))
+            if shared_categories_list:
+                dgData[dg_obj.name]['urlProfiles'] = panGatherFunctions.panorama_UrlFilteringProfiles(pano_obj, dg_obj.xpath(), shared_categories_list)
             else:
                 dgData[dg_obj.name]['urlProfiles'] = panGatherFunctions.panorama_UrlFilteringProfiles(pano_obj, dg_obj.xpath(), [])
         dgNum +=1
