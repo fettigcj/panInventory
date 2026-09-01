@@ -44,6 +44,19 @@ from pancore import panCore, panExcelStyles, panGatherFunctions
 #Import stock/public library modules
 import sys, datetime, xlsxwriter, argparse
 
+def merge_or_write(worksheet, first_row, first_col, last_row, last_col, text, cell_format=None):
+    """
+    Safely merge a range of cells or write to a single cell if the range collapses to one cell.
+
+    This prevents xlsxwriter "Can't merge single cell" exceptions when dynamic ranges
+    (computed from dataset sizes) unexpectedly have zero width/height.
+    """
+    if first_row == last_row and first_col == last_col:
+        worksheet.write(first_row, first_col, text, cell_format)
+    else:
+        worksheet.merge_range(first_row, first_col, last_row, last_col, text, cell_format)
+
+
 
 def buildAll(confPath):
     devData = {}
@@ -214,7 +227,7 @@ if __name__ == "__main__":
                         if profileType not in headers:
                             headers.append(profileType)
     worksheet = workbook.add_worksheet('profileGroups')
-    worksheet.merge_range(0, 0, 0, len(headers), 'Security Profile Groups',workbook.add_format(panExcelStyles.styles['label']))
+    merge_or_write(worksheet, 0, 0, 0, len(headers), 'Security Profile Groups', workbook.add_format(panExcelStyles.styles['label']))
     worksheet.write_row('B2',headers,workbook.add_format(panExcelStyles.styles['rowHeader']))
     worksheet.write(1, 0, 'DeviceGroup',workbook.add_format(panExcelStyles.styles['rowHeader']))
     row = 2
