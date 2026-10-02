@@ -13,4 +13,5 @@ __*
 *.tgz
 *.csv
 setVariables.bat
-setVariables.sh
+setVariables.sh*.bak
+*.err
